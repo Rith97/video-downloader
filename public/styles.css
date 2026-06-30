@@ -34,6 +34,8 @@
     --twitch-color: #9146FF;
     --dailymotion-color: #0066DC;
     --linkedin-color: #0A66C2;
+    --jav-color: #F97316;
+    --missav-color: #10B981;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.5);
@@ -279,6 +281,19 @@ body {
     cursor: default;
 }
 
+.chip-letter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: currentColor;
+    color: var(--bg-primary);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
 .platform-chip[data-platform="youtube"]:hover {
     color: var(--youtube-color);
     border-color: rgba(255, 0, 0, 0.2);
@@ -433,6 +448,36 @@ body {
     border-color: rgba(10, 102, 194, 0.3);
     background: rgba(10, 102, 194, 0.1);
     box-shadow: 0 0 20px rgba(10, 102, 194, 0.1);
+}
+
+.platform-chip[data-platform="javguru"]:hover,
+.platform-chip[data-platform="javeng"]:hover,
+.platform-chip[data-platform="javgg"]:hover {
+    color: var(--jav-color);
+    border-color: rgba(249, 115, 22, 0.2);
+    background: rgba(249, 115, 22, 0.06);
+}
+
+.platform-chip.active[data-platform="javguru"],
+.platform-chip.active[data-platform="javeng"],
+.platform-chip.active[data-platform="javgg"] {
+    color: var(--jav-color);
+    border-color: rgba(249, 115, 22, 0.3);
+    background: rgba(249, 115, 22, 0.1);
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.1);
+}
+
+.platform-chip[data-platform="missav"]:hover {
+    color: var(--missav-color);
+    border-color: rgba(16, 185, 129, 0.2);
+    background: rgba(16, 185, 129, 0.06);
+}
+
+.platform-chip.active[data-platform="missav"] {
+    color: var(--missav-color);
+    border-color: rgba(16, 185, 129, 0.3);
+    background: rgba(16, 185, 129, 0.1);
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
 }
 
 /* ── INPUT SECTION ────────────────────────────────────────────────────── */
@@ -740,6 +785,16 @@ body {
 
 .video-platform-badge.linkedin {
     background: rgba(10, 102, 194, 0.85);
+    color: white;
+}
+
+.video-platform-badge.jav {
+    background: rgba(249, 115, 22, 0.9);
+    color: white;
+}
+
+.video-platform-badge.missav {
+    background: rgba(16, 185, 129, 0.9);
     color: white;
 }
 
@@ -1099,6 +1154,8 @@ body {
 .history-badge.twitch     { background: rgba(145,70,255,0.15);  color: var(--twitch-color); }
 .history-badge.dailymotion{ background: rgba(0,102,220,0.15);   color: var(--dailymotion-color); }
 .history-badge.linkedin   { background: rgba(10,102,194,0.15);  color: var(--linkedin-color); }
+.history-badge.jav        { background: rgba(249,115,22,0.15);  color: var(--jav-color); }
+.history-badge.missav     { background: rgba(16,185,129,0.15);  color: var(--missav-color); }
 
 .history-time {
     font-size: 0.72rem;
