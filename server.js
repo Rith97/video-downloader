@@ -3,7 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
 const YTDlpWrap = require('yt-dlp-wrap').default;
-const ffmpegStatic = require('ffmpeg-static');
+
+// On Linux use the system ffmpeg (apt-installed); ffmpeg-static crashes with SIGSEGV there.
+const ffmpegStatic = process.platform === 'linux'
+    ? (fs.existsSync('/usr/bin/ffmpeg') ? '/usr/bin/ffmpeg' : 'ffmpeg')
+    : require('ffmpeg-static');
 
 const app = express();
 const PORT = process.env.PORT || 3000;

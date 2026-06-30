@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
+    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates ffmpeg \
     && apt-get install -y chromium \
     && pip3 install --no-cache-dir --break-system-packages -U yt-dlp curl_cffi \
     && apt-get purge -y python3-pip \
