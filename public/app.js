@@ -137,6 +137,34 @@ function setupEventListeners() {
         localStorage.removeItem(HISTORY_KEY);
         renderHistory();
     });
+
+    // Platform chips → open the site in a new tab
+    const PLATFORM_URLS = {
+        youtube:     'https://www.youtube.com',
+        facebook:    'https://www.facebook.com',
+        tiktok:      'https://www.tiktok.com',
+        javguru:     'https://jav.guru',
+        javeng:      'https://javeng.tv',
+        javgg:       'https://javgg.net',
+        missav:      'https://missav.com/en',
+        pinterest:   'https://www.pinterest.com',
+        telegram:    'https://web.telegram.org',
+        instagram:   'https://www.instagram.com',
+        twitter:     'https://x.com',
+        reddit:      'https://www.reddit.com',
+        vimeo:       'https://vimeo.com',
+        twitch:      'https://www.twitch.tv',
+        dailymotion: 'https://www.dailymotion.com',
+        linkedin:    'https://www.linkedin.com',
+    };
+
+    document.querySelectorAll('.platform-chip[data-platform]').forEach(chip => {
+        const url = PLATFORM_URLS[chip.dataset.platform];
+        if (!url) return;
+        chip.style.cursor = 'pointer';
+        chip.title = `Open ${chip.dataset.platform}`;
+        chip.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+    });
 }
 
 // ── CLEAR INPUT ──────────────────────────────────────────────────────────
@@ -220,6 +248,30 @@ function detectPlatform(url) {
             icon: '▶️',
             name: 'Dailymotion',
             color: 'dailymotion'
+        },
+        javguru: {
+            patterns: [/jav\.guru/],
+            icon: 'J',
+            name: 'JAV Guru',
+            color: 'jav'
+        },
+        javeng: {
+            patterns: [/javeng\.tv/, /javeng\.com/],
+            icon: 'J',
+            name: 'JAV Eng',
+            color: 'jav'
+        },
+        javgg: {
+            patterns: [/javgg\.net/],
+            icon: 'J',
+            name: 'JAVGG',
+            color: 'jav'
+        },
+        missav: {
+            patterns: [/missav\./],
+            icon: 'M',
+            name: 'MissAV',
+            color: 'missav'
         },
         linkedin: {
             patterns: [/linkedin\.com/],
@@ -342,6 +394,10 @@ function displayVideoInfo(info) {
         videoPlatformBadge.classList.add('twitch');
     } else if (platform.includes('dailymotion')) {
         videoPlatformBadge.classList.add('dailymotion');
+    } else if (platform.includes('jav') || platform.includes('guru')) {
+        videoPlatformBadge.classList.add('jav');
+    } else if (platform.includes('missav')) {
+        videoPlatformBadge.classList.add('missav');
     } else if (platform.includes('linkedin')) {
         videoPlatformBadge.classList.add('linkedin');
     }
@@ -557,6 +613,8 @@ function renderHistory() {
             : p.includes('vimeo') ? 'vimeo'
             : p.includes('twitch') ? 'twitch'
             : p.includes('dailymotion') ? 'dailymotion'
+            : p.includes('jav') || p.includes('guru') ? 'jav'
+            : p.includes('missav') ? 'missav'
             : p.includes('linkedin') ? 'linkedin'
             : '';
 

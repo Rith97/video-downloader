@@ -110,8 +110,10 @@ function friendlyError(raw) {
 // ── CURL-SITE EXTRACTION (javgg.net — no browser needed) ─────────────────
 
 const CURL_SITES = /javgg\.net/i;
+const MISSAV_SITES = /missav\./i;
 
 function isCurlSite(url) { return CURL_SITES.test(url); }
+function isMissavSite(url) { return MISSAV_SITES.test(url); }
 
 async function getJavggVideoUrl(pageUrl) {
     const code = `
@@ -138,6 +140,51 @@ og_img   = re.search(r'property="og:image"[^>]*content="([^"]+)"', r.text)
 title = og_title.group(1).strip() if og_title else 'JAV Video'
 print(json.dumps({'m3u8': m3u8s[0], 'referer': embed.group(1), 'title': title,
     'thumbnail': og_img.group(1).strip() if og_img else ''}))
+`.trim();
+    const out = await runPythonScript(code, [pageUrl]);
+    const data = JSON.parse(out);
+    if (data.error) throw new Error(data.error);
+    return data;
+}
+
+async function getMissavVideoUrl(pageUrl) {
+    const code = `
+import sys, json, re
+from html import unescape
+from curl_cffi import requests
+
+page_url = sys.argv[1]
+headers = {
+    'Referer': 'https://missav.ai/',
+    'Accept-Language': 'en-US,en;q=0.9',
+}
+r = requests.get(page_url, impersonate='chrome124', headers=headers, timeout=25, allow_redirects=True)
+if r.status_code != 200:
+    print(json.dumps({'error': f'Page returned {r.status_code}'})); raise SystemExit(0)
+
+t = unescape(r.text)
+t = re.sub(r'\\\\u002[fF]', '/', t).replace('\\\\/', '/')
+
+streams = re.findall(r'https?://[^\\s\\"\\x27<>]+\\.(?:m3u8|mp4)(?:\\?[^\\s\\"\\x27<>]*)?', t)
+streams = [s for s in streams if 'preview' not in s.lower() and 'thumbnail' not in s.lower()]
+if not streams:
+    print(json.dumps({'error': 'No downloadable video stream found on MissAV page'})); raise SystemExit(0)
+
+og_title = re.search(r'property=["\\x27]og:title["\\x27][^>]*content=["\\x27]([^"\\x27]+)', t)
+og_img = re.search(r'property=["\\x27]og:image["\\x27][^>]*content=["\\x27]([^"\\x27]+)', t)
+title_tag = re.search(r'<title[^>]*>([^<]+)</title>', t, re.I)
+title = (og_title or title_tag)
+title = title.group(1).strip() if title else 'MissAV Video'
+for s in [' - MissAV', ' | MissAV', ' MissAV']:
+    if title.endswith(s):
+        title = title[:-len(s)].strip()
+
+print(json.dumps({
+    'videoUrl': streams[0],
+    'referer': page_url,
+    'title': title,
+    'thumbnail': og_img.group(1).strip() if og_img else ''
+}))
 `.trim();
     const out = await runPythonScript(code, [pageUrl]);
     const data = JSON.parse(out);
@@ -391,6 +438,26 @@ app.post('/api/info', async (req, res) => {
         }
     }
 
+    // curl-based extraction for MissAV pages
+    if (isMissavSite(url)) {
+        try {
+            const data = await getMissavVideoUrl(url);
+            return res.json({
+                title: data.title || 'MissAV Video',
+                thumbnail: data.thumbnail || null,
+                duration: 0,
+                uploader: 'missav',
+                platform: 'missav',
+                viewCount: 0,
+                formats: [
+                    { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
+                ]
+            });
+        } catch (err) {
+            return res.status(500).json({ error: 'Could not fetch MissAV video info: ' + err.message });
+        }
+    }
+
     // Browser-based extraction for JAV sites
     if (isBrowserSite(url)) {
         try {
@@ -522,6 +589,51 @@ app.get('/api/download', async (req, res) => {
         } catch (err) {
             console.error('javgg.net download error:', err.message);
             res.status(500).json({ error: err.message || 'javgg.net download failed.' });
+        }
+        return;
+    }
+
+    // curl-based download for MissAV pages
+    if (isMissavSite(url)) {
+        if (!ytDlpAvailable || !ytDlpWrap) {
+            return sendYtDlpUnavailable(res);
+        }
+
+        try {
+            const data = await getMissavVideoUrl(url);
+            const args = [
+                data.videoUrl,
+                '--ffmpeg-location', ffmpegStatic,
+                '-o', outputTemplate,
+                '--no-warnings',
+                '--add-header', `Referer:${data.referer}`,
+                '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                '--merge-output-format', 'mp4',
+                '-f', 'best',
+            ];
+            await new Promise((resolve, reject) => {
+                const emitter = ytDlpWrap.exec(args);
+                let stderr = '';
+                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
+                emitter.on('error', reject);
+                emitter.on('close', code => {
+                    if (code === 0) resolve();
+                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+                });
+            });
+            const files = fs.readdirSync(DOWNLOADS_DIR)
+                .filter(f => f.includes(`_${timestamp}`))
+                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
+                .sort((a, b) => b.time - a.time);
+            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
+            const file = files[0];
+            const cleanName = file.name.replace(`_${timestamp}`, '');
+            res.download(file.path, cleanName, () => {
+                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+            });
+        } catch (err) {
+            console.error('MissAV download error:', err.message);
+            res.status(500).json({ error: err.message || 'MissAV download failed.' });
         }
         return;
     }
@@ -692,7 +804,7 @@ app.get('/api/health', async (req, res) => {
 
 // ── START SERVER ────────────────────────────────────────────────────────
 const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
     console.log(`
 ╔══════════════════════════════════════════════╗
 ║     🎬  Video Downloader Server Running      ║
@@ -700,4 +812,14 @@ app.listen(PORT, HOST, () => {
 ║     🎯  YouTube | Facebook | TikTok          ║
 ╚══════════════════════════════════════════════╝
     `);
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Stop the existing server or start this app with another port, for example: $env:PORT=3001; npm start`);
+        process.exit(1);
+    }
+
+    console.error('Server startup error:', err.message);
+    process.exit(1);
 });
