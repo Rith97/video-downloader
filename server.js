@@ -107,9 +107,250 @@ function friendlyError(raw) {
     return 'Download failed. The video may be private, restricted, or the URL is invalid.';
 }
 
+// ── BROWSER-SITE EXTRACTION (jav.guru, javeng.tv) ────────────────────────
+
+const BROWSER_SITES = /jav\.guru|javeng\.tv|javeng\.com/i;
+
+function isBrowserSite(url) {
+    return BROWSER_SITES.test(url);
+}
+
+function getChromiumPath() {
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+    if (process.platform === 'linux') {
+        for (const p of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']) {
+            if (fs.existsSync(p)) return p;
+        }
+    }
+    for (const p of [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
+    ]) {
+        if (fs.existsSync(p)) return p;
+    }
+    return 'chromium';
+}
+
+function getBrowserPython() {
+    const venv = path.join(__dirname, '.venv', 'Scripts', 'python.exe');
+    if (process.platform === 'win32' && fs.existsSync(venv)) return venv;
+    return 'python3';
+}
+
+function runPythonScript(code, args = []) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn(getBrowserPython(), ['-c', code, ...args]);
+        let out = '', err = '';
+        proc.stdout.on('data', d => { out += d.toString(); });
+        proc.stderr.on('data', d => { err += d.toString(); });
+        proc.on('close', code => {
+            if (code !== 0) reject(new Error(err || 'Python subprocess failed'));
+            else resolve(out.trim());
+        });
+    });
+}
+
+async function scrapeMeta(url) {
+    const code = `
+import sys, json, re
+try:
+    from curl_cffi import requests
+    r = requests.get(sys.argv[1], impersonate='chrome124', timeout=20)
+    t = r.text
+    og_title = re.search(r'property="og:title"[^>]*content="([^"]+)"', t)
+    og_img   = re.search(r'property="og:image"[^>]*content="([^"]+)"', t)
+    h1       = (re.search(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>', t) or
+                re.search(r'<h1[^>]*>([^<]+)<', t))
+    raw      = (h1 or og_title)
+    title    = raw.group(1).strip() if raw else 'JAV Video'
+    for s in [' - Watch Free JAV English Subtitle Videos',
+              ' | Watch Free JAV English Subtitle Videos',
+              ' &#8211; Watch', ' - Watch']:
+        if title.endswith(s):
+            title = title[:-len(s)]
+    print(json.dumps({'title': title, 'thumbnail': og_img.group(1).strip() if og_img else ''}))
+except Exception as e:
+    print(json.dumps({'title': 'JAV Video', 'thumbnail': ''}))
+`.trim();
+    try {
+        const out = await runPythonScript(code, [url]);
+        return JSON.parse(out);
+    } catch {
+        return { title: 'JAV Video', thumbnail: '' };
+    }
+}
+
+function cookiesToNetscape(cookies) {
+    const lines = ['# Netscape HTTP Cookie File', ''];
+    for (const c of cookies) {
+        const domain = c.domain.startsWith('.') ? c.domain : '.' + c.domain;
+        const expiry = c.expires && c.expires > 0 ? Math.round(c.expires) : '0';
+        lines.push([domain, 'TRUE', c.path || '/', c.secure ? 'TRUE' : 'FALSE', expiry, c.name, c.value].join('\t'));
+    }
+    return lines.join('\n');
+}
+
+// Player hook injected into EVERY frame before any scripts run.
+// Captures the video URL passed to jwpSTXplayer() or jwplayer().setup().
+const PLAYER_HOOK_SCRIPT = `
+(function() {
+    var _poll = setInterval(function() {
+        if (window.__vgHooked__) { clearInterval(_poll); return; }
+        if (typeof window.jwpSTXplayer === 'function') {
+            var orig = window.jwpSTXplayer;
+            window.jwpSTXplayer = function(playlist) {
+                window.__vgVideoUrl__ = String(playlist);
+                try { window.__vgCapture__(String(playlist)); } catch(e) {}
+                return orig.apply(this, arguments);
+            };
+            window.__vgHooked__ = 'jwpSTXplayer'; clearInterval(_poll); return;
+        }
+        if (typeof window.jwplayer === 'function' && !window.__vgJwHooked__) {
+            window.__vgJwHooked__ = true;
+            var origJw = window.jwplayer;
+            window.jwplayer = function() {
+                var inst = origJw.apply(this, arguments);
+                if (inst && typeof inst.setup === 'function') {
+                    var origSetup = inst.setup;
+                    inst.setup = function(cfg) {
+                        try {
+                            var src = Array.isArray(cfg.sources) ? cfg.sources[0] : null;
+                            var url = (src && (src.file || src.src)) || cfg.file || cfg.src;
+                            if (url && typeof url === 'string') {
+                                window.__vgVideoUrl__ = url;
+                                try { window.__vgCapture__(url); } catch(e) {}
+                            }
+                        } catch(e) {}
+                        return origSetup.apply(this, arguments);
+                    };
+                }
+                return inst;
+            };
+            window.__vgHooked__ = 'jwplayer'; clearInterval(_poll);
+        }
+    }, 80);
+})();
+`;
+
+async function browserGetVideoUrl(siteUrl) {
+    let puppeteer;
+    try { puppeteer = require('puppeteer-core'); }
+    catch { throw new Error('puppeteer-core is not installed. Run: npm install'); }
+
+    const browser = await puppeteer.launch({
+        executablePath: getChromiumPath(),
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+               '--disable-gpu', '--disable-blink-features=AutomationControlled'],
+    });
+
+    try {
+        const page = await browser.newPage();
+
+        // Inject hooks before any page scripts run, in all frames
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
+        await page.evaluateOnNewDocument(new Function(PLAYER_HOOK_SCRIPT));
+
+        await page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        );
+
+        let videoUrl = null;
+
+        // exposeFunction works in ALL frames including cross-origin iframes
+        await page.exposeFunction('__vgCapture__', (url) => {
+            if (!videoUrl && url) videoUrl = url;
+        });
+
+        await page.setRequestInterception(true);
+        page.on('request', req => {
+            const u = req.url();
+            if ((u.includes('.m3u8') || u.includes('/m3u8/')) && !videoUrl) videoUrl = u;
+            req.continue().catch(() => {});
+        });
+
+        if (/javeng\.tv|javeng\.com/i.test(siteUrl)) {
+            await page.goto(siteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+            // Wait for server 1 (playkrx18.site) — usually auto-loads first
+            await new Promise(r => setTimeout(r, 15000));
+            if (!videoUrl) videoUrl = await pollFrames(page, ['playkrx18', 'mov18plus', 'cloud']);
+
+            // Fallback: click server 2
+            if (!videoUrl) {
+                await page.evaluate(() => {
+                    const btn = document.querySelector('[data-nume="2"]');
+                    if (btn) btn.click();
+                }).catch(() => {});
+                await new Promise(r => setTimeout(r, 15000));
+                if (!videoUrl) videoUrl = await pollFrames(page, ['playkrx18', 'mov18plus', 'cloud']);
+            }
+
+        } else if (/jav\.guru/i.test(siteUrl)) {
+            await page.goto(siteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            // Click first player button to open the embed
+            await page.click('a#wp-btn-iframe, .player-btn, [class*="player"]').catch(() => {});
+            await new Promise(r => setTimeout(r, 20000));
+            if (!videoUrl) videoUrl = await pollFrames(page, ['play', 'embed', 'player']);
+        }
+
+        if (!videoUrl) throw new Error('Could not find video stream. The site may be down or the video unavailable.');
+
+        const cookies = await page.cookies();
+        const cookiePath = path.join(__dirname, 'downloads', `_cookies_${Date.now()}.txt`);
+        fs.writeFileSync(cookiePath, cookiesToNetscape(cookies));
+
+        return { videoUrl, referer: page.url(), cookiePath };
+    } finally {
+        await browser.close();
+    }
+}
+
+async function pollFrames(page, domainHints) {
+    for (const frame of page.frames()) {
+        const fu = frame.url();
+        if (domainHints.some(h => fu.includes(h))) {
+            try {
+                const v = await frame.evaluate(() => window.__vgVideoUrl__ || null);
+                if (v) return v;
+            } catch {}
+        }
+    }
+    return null;
+}
+
 // ── GET VIDEO INFO ──────────────────────────────────────────────────────
 app.post('/api/info', async (req, res) => {
     const { url } = req.body;
+
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+
+    // Browser-based extraction for JAV sites
+    if (isBrowserSite(url)) {
+        try {
+            const meta = await scrapeMeta(url);
+            const host = new URL(url).hostname.replace(/^www\./, '');
+            return res.json({
+                title: meta.title || 'JAV Video',
+                thumbnail: meta.thumbnail || null,
+                duration: 0,
+                uploader: host,
+                platform: host,
+                viewCount: 0,
+                formats: [
+                    { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
+                ]
+            });
+        } catch (err) {
+            return res.status(500).json({ error: 'Could not fetch video info: ' + err.message });
+        }
+    }
 
     if (!ytDlpAvailable || !ytDlpWrap) {
         return sendYtDlpUnavailable(res);
@@ -177,16 +418,68 @@ app.post('/api/info', async (req, res) => {
 app.get('/api/download', async (req, res) => {
     const { url, format } = req.query;
 
-    if (!ytDlpAvailable || !ytDlpWrap) {
-        return sendYtDlpUnavailable(res);
-    }
-
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
     }
 
     const timestamp = Date.now();
     const outputTemplate = path.join(DOWNLOADS_DIR, `%(title)s_${timestamp}.%(ext)s`);
+
+    // Browser-based download for JAV sites
+    if (isBrowserSite(url)) {
+        let cookiePath = null;
+        try {
+            const { videoUrl, referer, cookiePath: cp } = await browserGetVideoUrl(url);
+            cookiePath = cp;
+
+            const args = [
+                videoUrl,
+                '--ffmpeg-location', ffmpegStatic,
+                '-o', outputTemplate,
+                '--no-warnings',
+                '--cookies', cookiePath,
+                '--add-header', `Referer:${referer}`,
+                '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                '--merge-output-format', 'mp4',
+                '--extractor-args', 'generic:impersonate',
+                '-f', 'best',
+            ];
+
+            await new Promise((resolve, reject) => {
+                const emitter = ytDlpWrap.exec(args);
+                let stderr = '';
+                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
+                emitter.on('error', reject);
+                emitter.on('close', code => {
+                    if (code === 0) resolve();
+                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+                });
+            });
+
+            const files = fs.readdirSync(DOWNLOADS_DIR)
+                .filter(f => f.includes(`_${timestamp}`))
+                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
+                .sort((a, b) => b.time - a.time);
+
+            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
+
+            const file = files[0];
+            const cleanName = file.name.replace(`_${timestamp}`, '');
+            res.download(file.path, cleanName, () => {
+                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+            });
+        } catch (err) {
+            console.error('Browser download error:', err.message);
+            res.status(500).json({ error: err.message || 'Browser extraction failed.' });
+        } finally {
+            if (cookiePath) try { fs.unlinkSync(cookiePath); } catch {}
+        }
+        return;
+    }
+
+    if (!ytDlpAvailable || !ytDlpWrap) {
+        return sendYtDlpUnavailable(res);
+    }
 
     try {
         // Build yt-dlp arguments
