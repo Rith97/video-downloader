@@ -396,11 +396,9 @@ async function downloadVideo() {
     const selectedFormat = qualitySelect.value;
     downloadBtn.disabled = true;
 
-    // Show progress
     downloadProgress.style.display = 'block';
     progressBarFill.style.width = '0%';
 
-    // Simulate progress since we can't track yt-dlp progress via HTTP
     const progressInterval = simulateProgress();
 
     try {
@@ -409,40 +407,7 @@ async function downloadVideo() {
             format: selectedFormat
         });
 
-        const response = await fetch(`/api/download?${params}`);
-
-        if (!response.ok) {
-            const contentType = response.headers.get('content-type') || '';
-            const errorData = contentType.includes('application/json')
-                ? await response.json().catch(() => ({}))
-                : { error: await response.text().catch(() => '') };
-            throw new Error(errorData.error || 'Download failed');
-        }
-
-        // Complete progress
-        clearInterval(progressInterval);
-        progressBarFill.style.width = '100%';
-
-        // Get filename from Content-Disposition header
-        const disposition = response.headers.get('Content-Disposition');
-        let filename = 'video.mp4';
-        if (disposition) {
-            const match = disposition.match(/filename="?(.+?)"?$/);
-            if (match) filename = decodeURIComponent(match[1]);
-        }
-
-        // Download the blob
-        const blob = await response.blob();
-        const downloadUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(downloadUrl);
-
-        // Save to history
+        // Save to history before triggering download
         if (currentVideoInfo) {
             saveToHistory({
                 url: currentVideoUrl,
@@ -455,7 +420,20 @@ async function downloadVideo() {
             });
         }
 
-        // Success animation
+        // Use native browser download — no RAM buffering, works on Android & iOS.
+        // The server sends Content-Disposition: attachment which triggers the
+        // save dialog without needing a blob URL (which fails on iOS Safari).
+        const link = document.createElement('a');
+        link.href = `/api/download?${params}`;
+        link.setAttribute('download', '');
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        clearInterval(progressInterval);
+        progressBarFill.style.width = '100%';
+
         setTimeout(() => {
             downloadProgress.style.display = 'none';
             progressBarFill.style.width = '0%';

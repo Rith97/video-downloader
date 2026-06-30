@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+  </defs>
+  <rect width="40" height="40" rx="10" fill="url(#lg)"/>
+  <!-- Play triangle -->
+  <path d="M7 10 L7 28 L19 19 Z" fill="white"/>
+  <!-- Download shaft -->
+  <rect x="26.5" y="9" width="5" height="13" rx="2.5" fill="white"/>
+  <!-- Download arrowhead -->
+  <path d="M23 21 L29 30.5 L35 21 Z" fill="white"/>
+  <!-- Download baseline -->
+  <rect x="23" y="33" width="12" height="3.5" rx="1.75" fill="white"/>
+</svg>
