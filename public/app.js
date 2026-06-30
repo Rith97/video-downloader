@@ -140,8 +140,16 @@ function setupEventListeners() {
         spankbang:   'https://www.spankbang.com',
         redtube:     'https://www.redtube.com',
         eporner:     'https://www.eporner.com',
+        xhamster:    'https://xhamster.com',
+        xnxx:        'https://www.xnxx.com',
+        youporn:     'https://www.youporn.com',
+        tube8:       'https://www.tube8.com',
         bilibili:    'https://www.bilibili.com',
         rumble:      'https://rumble.com',
+        niconico:    'https://www.nicovideo.jp',
+        odysee:      'https://odysee.com',
+        kick:        'https://kick.com',
+        bitchute:    'https://www.bitchute.com',
         pinterest:   'https://www.pinterest.com',
         telegram:    'https://web.telegram.org',
         instagram:   'https://www.instagram.com',
@@ -190,8 +198,16 @@ function detectPlatform(url) {
         spankbang:   { patterns: [/spankbang\.com/, /spankbang\.party/],                icon: 'S',  name: 'SpankBang',  color: 'spankbang' },
         redtube:     { patterns: [/redtube\.com/],                                       icon: 'R',  name: 'RedTube',    color: 'redtube' },
         eporner:     { patterns: [/eporner\.com/],                                       icon: 'E',  name: 'Eporner',    color: 'eporner' },
+        xhamster:    { patterns: [/xhamster\.com/, /xhamster\.desi/],                   icon: 'X',  name: 'xHamster',   color: 'xhamster' },
+        xnxx:        { patterns: [/xnxx\.com/],                                          icon: 'X',  name: 'XNXX',       color: 'xnxx' },
+        youporn:     { patterns: [/youporn\.com/],                                       icon: 'Y',  name: 'YouPorn',    color: 'youporn' },
+        tube8:       { patterns: [/tube8\.com/],                                         icon: 'T',  name: 'Tube8',      color: 'tube8' },
         bilibili:    { patterns: [/bilibili\.com/, /b23\.tv/],                           icon: 'B',  name: 'Bilibili',   color: 'bilibili' },
         rumble:      { patterns: [/rumble\.com/],                                        icon: 'R',  name: 'Rumble',     color: 'rumble' },
+        niconico:    { patterns: [/nicovideo\.jp/, /nico\.ms/],                          icon: 'N',  name: 'Niconico',   color: 'niconico' },
+        odysee:      { patterns: [/odysee\.com/, /lbry\.tv/],                            icon: 'O',  name: 'Odysee',     color: 'odysee' },
+        kick:        { patterns: [/kick\.com/],                                          icon: 'K',  name: 'Kick',       color: 'kick' },
+        bitchute:    { patterns: [/bitchute\.com/],                                      icon: 'B',  name: 'BitChute',   color: 'bitchute' },
         pinterest:   { patterns: [/pinterest\.com/, /pin\.it/, /pinterest\.\w{2,3}/],   icon: '📌', name: 'Pinterest',  color: 'pinterest' },
         telegram:    { patterns: [/t\.me/, /telegram\.me/, /telegram\.org/],            icon: '✈️', name: 'Telegram',   color: 'telegram' },
         instagram:   { patterns: [/instagram\.com/, /instagr\.am/],                     icon: '📷', name: 'Instagram',  color: 'instagram' },
@@ -349,8 +365,16 @@ function platformToClass(p) {
     if (p.includes('spankbang'))                 return 'spankbang';
     if (p.includes('redtube'))                   return 'redtube';
     if (p.includes('eporner'))                   return 'eporner';
+    if (p.includes('xhamster'))                  return 'xhamster';
+    if (p.includes('xnxx'))                      return 'xnxx';
+    if (p.includes('youporn'))                   return 'youporn';
+    if (p.includes('tube8'))                     return 'tube8';
     if (p.includes('bilibili'))                  return 'bilibili';
     if (p.includes('rumble'))                    return 'rumble';
+    if (p.includes('nicovideo') || p.includes('niconico')) return 'niconico';
+    if (p.includes('odysee') || p.includes('lbry'))        return 'odysee';
+    if (p.includes('kick'))                      return 'kick';
+    if (p.includes('bitchute'))                  return 'bitchute';
     if (p.includes('jav') || p.includes('guru')) return 'jav';
     if (p.includes('missav'))                    return 'missav';
     return '';

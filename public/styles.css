@@ -41,8 +41,16 @@
     --spankbang-color: #FF4600;
     --redtube-color: #BC0101;
     --eporner-color: #E8A000;
+    --xhamster-color: #F7A824;
+    --xnxx-color: #FFC107;
+    --youporn-color: #FF4500;
+    --tube8-color: #FF6B00;
     --bilibili-color: #00AEEC;
     --rumble-color: #85C742;
+    --niconico-color: #E0353A;
+    --odysee-color: #E70079;
+    --kick-color: #53FC18;
+    --bitchute-color: #E85D04;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.5);
@@ -552,12 +560,59 @@ body {
     box-shadow: 0 0 20px rgba(232, 160, 0, 0.1);
 }
 
+.platform-chip[data-platform="xhamster"]:hover {
+    color: var(--xhamster-color);
+    border-color: rgba(247, 168, 36, 0.2);
+    background: rgba(247, 168, 36, 0.06);
+}
+.platform-chip.active[data-platform="xhamster"] {
+    color: var(--xhamster-color);
+    border-color: rgba(247, 168, 36, 0.3);
+    background: rgba(247, 168, 36, 0.1);
+    box-shadow: 0 0 20px rgba(247, 168, 36, 0.1);
+}
+
+.platform-chip[data-platform="xnxx"]:hover {
+    color: var(--xnxx-color);
+    border-color: rgba(255, 193, 7, 0.2);
+    background: rgba(255, 193, 7, 0.06);
+}
+.platform-chip.active[data-platform="xnxx"] {
+    color: var(--xnxx-color);
+    border-color: rgba(255, 193, 7, 0.3);
+    background: rgba(255, 193, 7, 0.1);
+    box-shadow: 0 0 20px rgba(255, 193, 7, 0.1);
+}
+
+.platform-chip[data-platform="youporn"]:hover {
+    color: var(--youporn-color);
+    border-color: rgba(255, 69, 0, 0.2);
+    background: rgba(255, 69, 0, 0.06);
+}
+.platform-chip.active[data-platform="youporn"] {
+    color: var(--youporn-color);
+    border-color: rgba(255, 69, 0, 0.3);
+    background: rgba(255, 69, 0, 0.1);
+    box-shadow: 0 0 20px rgba(255, 69, 0, 0.1);
+}
+
+.platform-chip[data-platform="tube8"]:hover {
+    color: var(--tube8-color);
+    border-color: rgba(255, 107, 0, 0.2);
+    background: rgba(255, 107, 0, 0.06);
+}
+.platform-chip.active[data-platform="tube8"] {
+    color: var(--tube8-color);
+    border-color: rgba(255, 107, 0, 0.3);
+    background: rgba(255, 107, 0, 0.1);
+    box-shadow: 0 0 20px rgba(255, 107, 0, 0.1);
+}
+
 .platform-chip[data-platform="bilibili"]:hover {
     color: var(--bilibili-color);
     border-color: rgba(0, 174, 236, 0.2);
     background: rgba(0, 174, 236, 0.06);
 }
-
 .platform-chip.active[data-platform="bilibili"] {
     color: var(--bilibili-color);
     border-color: rgba(0, 174, 236, 0.3);
@@ -570,12 +625,59 @@ body {
     border-color: rgba(133, 199, 66, 0.2);
     background: rgba(133, 199, 66, 0.06);
 }
-
 .platform-chip.active[data-platform="rumble"] {
     color: var(--rumble-color);
     border-color: rgba(133, 199, 66, 0.3);
     background: rgba(133, 199, 66, 0.1);
     box-shadow: 0 0 20px rgba(133, 199, 66, 0.1);
+}
+
+.platform-chip[data-platform="niconico"]:hover {
+    color: var(--niconico-color);
+    border-color: rgba(224, 53, 58, 0.2);
+    background: rgba(224, 53, 58, 0.06);
+}
+.platform-chip.active[data-platform="niconico"] {
+    color: var(--niconico-color);
+    border-color: rgba(224, 53, 58, 0.3);
+    background: rgba(224, 53, 58, 0.1);
+    box-shadow: 0 0 20px rgba(224, 53, 58, 0.1);
+}
+
+.platform-chip[data-platform="odysee"]:hover {
+    color: var(--odysee-color);
+    border-color: rgba(231, 0, 121, 0.2);
+    background: rgba(231, 0, 121, 0.06);
+}
+.platform-chip.active[data-platform="odysee"] {
+    color: var(--odysee-color);
+    border-color: rgba(231, 0, 121, 0.3);
+    background: rgba(231, 0, 121, 0.1);
+    box-shadow: 0 0 20px rgba(231, 0, 121, 0.1);
+}
+
+.platform-chip[data-platform="kick"]:hover {
+    color: var(--kick-color);
+    border-color: rgba(83, 252, 24, 0.2);
+    background: rgba(83, 252, 24, 0.06);
+}
+.platform-chip.active[data-platform="kick"] {
+    color: var(--kick-color);
+    border-color: rgba(83, 252, 24, 0.3);
+    background: rgba(83, 252, 24, 0.1);
+    box-shadow: 0 0 20px rgba(83, 252, 24, 0.1);
+}
+
+.platform-chip[data-platform="bitchute"]:hover {
+    color: var(--bitchute-color);
+    border-color: rgba(232, 93, 4, 0.2);
+    background: rgba(232, 93, 4, 0.06);
+}
+.platform-chip.active[data-platform="bitchute"] {
+    color: var(--bitchute-color);
+    border-color: rgba(232, 93, 4, 0.3);
+    background: rgba(232, 93, 4, 0.1);
+    box-shadow: 0 0 20px rgba(232, 93, 4, 0.1);
 }
 
 /* ── INPUT SECTION ────────────────────────────────────────────────────── */
@@ -909,6 +1011,47 @@ body {
 .video-platform-badge.eporner {
     background: rgba(232, 160, 0, 0.9);
     color: #1a1a1a;
+}
+
+.video-platform-badge.xhamster {
+    background: rgba(247, 168, 36, 0.9);
+    color: #1a1a1a;
+}
+
+.video-platform-badge.xnxx {
+    background: rgba(30, 30, 30, 0.95);
+    color: var(--xnxx-color);
+    border: 1px solid rgba(255, 193, 7, 0.4);
+}
+
+.video-platform-badge.youporn {
+    background: rgba(255, 69, 0, 0.9);
+    color: white;
+}
+
+.video-platform-badge.tube8 {
+    background: rgba(255, 107, 0, 0.9);
+    color: white;
+}
+
+.video-platform-badge.niconico {
+    background: rgba(224, 53, 58, 0.9);
+    color: white;
+}
+
+.video-platform-badge.odysee {
+    background: rgba(231, 0, 121, 0.9);
+    color: white;
+}
+
+.video-platform-badge.kick {
+    background: rgba(83, 252, 24, 0.9);
+    color: #0a1a00;
+}
+
+.video-platform-badge.bitchute {
+    background: rgba(232, 93, 4, 0.9);
+    color: white;
 }
 
 .video-platform-badge.pornhub {
@@ -1318,8 +1461,16 @@ body {
 .history-badge.spankbang  { background: rgba(255,70,0,0.15);    color: var(--spankbang-color); }
 .history-badge.redtube    { background: rgba(188,1,1,0.15);     color: var(--redtube-color); }
 .history-badge.eporner    { background: rgba(232,160,0,0.15);   color: var(--eporner-color); }
+.history-badge.xhamster   { background: rgba(247,168,36,0.15);  color: var(--xhamster-color); }
+.history-badge.xnxx       { background: rgba(255,193,7,0.15);   color: var(--xnxx-color); }
+.history-badge.youporn    { background: rgba(255,69,0,0.15);    color: var(--youporn-color); }
+.history-badge.tube8      { background: rgba(255,107,0,0.15);   color: var(--tube8-color); }
 .history-badge.bilibili   { background: rgba(0,174,236,0.15);   color: var(--bilibili-color); }
 .history-badge.rumble     { background: rgba(133,199,66,0.15);  color: var(--rumble-color); }
+.history-badge.niconico   { background: rgba(224,53,58,0.15);   color: var(--niconico-color); }
+.history-badge.odysee     { background: rgba(231,0,121,0.15);   color: var(--odysee-color); }
+.history-badge.kick       { background: rgba(83,252,24,0.12);   color: var(--kick-color); }
+.history-badge.bitchute   { background: rgba(232,93,4,0.15);    color: var(--bitchute-color); }
 
 .history-time {
     font-size: 0.72rem;
