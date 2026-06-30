@@ -1,0 +1,638 @@
+// ── DOM ELEMENTS ─────────────────────────────────────────────────────────
+const urlInput = document.getElementById('urlInput');
+const fetchBtn = document.getElementById('fetchBtn');
+const pasteBtn = document.getElementById('pasteBtn');
+const clearBtn = document.getElementById('clearBtn');
+const fetchBtnText = document.querySelector('.fetch-btn-text');
+const fetchBtnLoader = document.querySelector('.fetch-btn-loader');
+const detectedPlatform = document.getElementById('detectedPlatform');
+const platformIcon = document.getElementById('platformIcon');
+const platformName = document.getElementById('platformName');
+const errorMessage = document.getElementById('errorMessage');
+const errorText = document.getElementById('errorText');
+const videoCard = document.getElementById('videoCard');
+const videoThumbnail = document.getElementById('videoThumbnail');
+const videoTitle = document.getElementById('videoTitle');
+const videoDuration = document.getElementById('videoDuration');
+const videoPlatformBadge = document.getElementById('videoPlatformBadge');
+const videoUploader = document.getElementById('videoUploader');
+const videoViews = document.getElementById('videoViews');
+const qualitySelect = document.getElementById('qualitySelect');
+const downloadBtn = document.getElementById('downloadBtn');
+const downloadProgress = document.getElementById('downloadProgress');
+const progressBarFill = document.getElementById('progressBarFill');
+const statusText = document.getElementById('statusText');
+const badgeDot = document.querySelector('.badge-dot');
+const inputWrapper = document.getElementById('inputWrapper');
+const historySection = document.getElementById('historySection');
+const historyList = document.getElementById('historyList');
+const historyClearBtn = document.getElementById('historyClearBtn');
+
+const HISTORY_KEY = 'videograb_history';
+const MAX_HISTORY = 20;
+
+// ── STATE ────────────────────────────────────────────────────────────────
+let currentVideoUrl = '';
+let currentVideoInfo = null;
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    createParticles();
+    checkServerHealth();
+    setupEventListeners();
+    renderHistory();
+});
+
+// ── PARTICLES ────────────────────────────────────────────────────────────
+function createParticles() {
+    const container = document.getElementById('particles');
+    const count = 25;
+
+    for (let i = 0; i < count; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'particle';
+        particle.style.left = `${Math.random() * 100}%`;
+        particle.style.animationDuration = `${8 + Math.random() * 12}s`;
+        particle.style.animationDelay = `${Math.random() * 10}s`;
+        particle.style.width = `${2 + Math.random() * 3}px`;
+        particle.style.height = particle.style.width;
+
+        const colors = [
+            'rgba(139, 92, 246, 0.4)',
+            'rgba(236, 72, 153, 0.3)',
+            'rgba(59, 130, 246, 0.3)',
+            'rgba(16, 185, 129, 0.3)'
+        ];
+        particle.style.background = colors[Math.floor(Math.random() * colors.length)];
+
+        container.appendChild(particle);
+    }
+}
+
+// ── SERVER HEALTH CHECK ──────────────────────────────────────────────────
+async function checkServerHealth() {
+    try {
+        const res = await fetch('/api/health');
+        const contentType = res.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') ? await res.json() : { message: await res.text() };
+
+        if (res.ok && data.status === 'ok') {
+            statusText.textContent = `Ready • yt-dlp ${data.ytDlpVersion}`;
+            badgeDot.classList.remove('error');
+        } else {
+            statusText.textContent = data.message || 'yt-dlp not found';
+            badgeDot.classList.add('error');
+        }
+    } catch {
+        statusText.textContent = 'Server offline';
+        badgeDot.classList.add('error');
+    }
+}
+
+// ── EVENT LISTENERS ──────────────────────────────────────────────────────
+function setupEventListeners() {
+    // URL input changes
+    urlInput.addEventListener('input', () => {
+        detectPlatform(urlInput.value);
+        hideError();
+        clearBtn.style.display = urlInput.value ? 'flex' : 'none';
+    });
+
+    // Enter key to fetch
+    urlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            fetchVideoInfo();
+        }
+    });
+
+    // Paste button
+    pasteBtn.addEventListener('click', async () => {
+        try {
+            const text = await navigator.clipboard.readText();
+            urlInput.value = text;
+            detectPlatform(text);
+            hideError();
+            clearBtn.style.display = text ? 'flex' : 'none';
+
+            pasteBtn.style.color = 'var(--accent-green)';
+            setTimeout(() => { pasteBtn.style.color = ''; }, 600);
+        } catch {
+            urlInput.focus();
+        }
+    });
+
+    // Clear button
+    clearBtn.addEventListener('click', () => {
+        clearInput();
+    });
+
+    // Fetch button
+    fetchBtn.addEventListener('click', fetchVideoInfo);
+
+    // Download button
+    downloadBtn.addEventListener('click', downloadVideo);
+
+    // History clear
+    historyClearBtn.addEventListener('click', () => {
+        localStorage.removeItem(HISTORY_KEY);
+        renderHistory();
+    });
+}
+
+// ── CLEAR INPUT ──────────────────────────────────────────────────────────
+function clearInput() {
+    urlInput.value = '';
+    clearBtn.style.display = 'none';
+    detectedPlatform.style.display = 'none';
+    document.querySelectorAll('.platform-chip').forEach(c => c.classList.remove('active'));
+    videoCard.style.display = 'none';
+    hideError();
+    currentVideoUrl = '';
+    currentVideoInfo = null;
+    urlInput.focus();
+}
+
+// ── PLATFORM DETECTION ───────────────────────────────────────────────────
+function detectPlatform(url) {
+    const platforms = {
+        youtube: {
+            patterns: [/youtube\.com/, /youtu\.be/, /youtube-nocookie\.com/],
+            icon: '🔴',
+            name: 'YouTube',
+            color: 'youtube'
+        },
+        facebook: {
+            patterns: [/facebook\.com/, /fb\.watch/, /fb\.com/],
+            icon: '🔵',
+            name: 'Facebook',
+            color: 'facebook'
+        },
+        tiktok: {
+            patterns: [/tiktok\.com/, /vm\.tiktok\.com/],
+            icon: '⚫',
+            name: 'TikTok',
+            color: 'tiktok'
+        },
+        pinterest: {
+            patterns: [/pinterest\.com/, /pin\.it/, /pinterest\.\w{2,3}/],
+            icon: '📌',
+            name: 'Pinterest',
+            color: 'pinterest'
+        },
+        telegram: {
+            patterns: [/t\.me/, /telegram\.me/, /telegram\.org/],
+            icon: '✈️',
+            name: 'Telegram',
+            color: 'telegram'
+        },
+        instagram: {
+            patterns: [/instagram\.com/, /instagr\.am/],
+            icon: '📷',
+            name: 'Instagram',
+            color: 'instagram'
+        },
+        twitter: {
+            patterns: [/twitter\.com/, /x\.com/, /t\.co/],
+            icon: '🐦',
+            name: 'X / Twitter',
+            color: 'twitter'
+        },
+        reddit: {
+            patterns: [/reddit\.com/, /redd\.it/, /v\.redd\.it/],
+            icon: '🤖',
+            name: 'Reddit',
+            color: 'reddit'
+        },
+        vimeo: {
+            patterns: [/vimeo\.com/],
+            icon: '🎬',
+            name: 'Vimeo',
+            color: 'vimeo'
+        },
+        twitch: {
+            patterns: [/twitch\.tv/, /clips\.twitch\.tv/],
+            icon: '🎮',
+            name: 'Twitch',
+            color: 'twitch'
+        },
+        dailymotion: {
+            patterns: [/dailymotion\.com/, /dai\.ly/],
+            icon: '▶️',
+            name: 'Dailymotion',
+            color: 'dailymotion'
+        },
+        linkedin: {
+            patterns: [/linkedin\.com/],
+            icon: '💼',
+            name: 'LinkedIn',
+            color: 'linkedin'
+        }
+    };
+
+    // Reset platform chips
+    document.querySelectorAll('.platform-chip').forEach(chip => {
+        chip.classList.remove('active');
+    });
+
+    for (const [key, platform] of Object.entries(platforms)) {
+        if (platform.patterns.some(p => p.test(url))) {
+            detectedPlatform.style.display = 'flex';
+            platformIcon.textContent = platform.icon;
+            platformName.textContent = platform.name;
+
+            // Highlight matching chip
+            const chip = document.querySelector(`.platform-chip[data-platform="${key}"]`);
+            if (chip) chip.classList.add('active');
+
+            return key;
+        }
+    }
+
+    detectedPlatform.style.display = 'none';
+    return null;
+}
+
+// ── FETCH VIDEO INFO ─────────────────────────────────────────────────────
+async function fetchVideoInfo() {
+    const url = urlInput.value.trim();
+
+    if (!url) {
+        showError('Please paste a video URL first.');
+        return;
+    }
+
+    if (!isValidUrl(url)) {
+        showError('Please enter a valid URL.');
+        return;
+    }
+
+    setLoading(true);
+    hideError();
+    videoCard.style.display = 'none';
+
+    try {
+        const res = await fetch('/api/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') ? await res.json() : { error: await res.text() };
+
+        if (!res.ok) {
+            throw new Error(data.error || 'Failed to fetch video info');
+        }
+
+        currentVideoUrl = url;
+        currentVideoInfo = data;
+        displayVideoInfo(data);
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        setLoading(false);
+    }
+}
+
+// ── DISPLAY VIDEO INFO ──────────────────────────────────────────────────
+function displayVideoInfo(info) {
+    // Thumbnail
+    if (info.thumbnail) {
+        videoThumbnail.src = info.thumbnail;
+        videoThumbnail.alt = info.title;
+    } else {
+        videoThumbnail.src = '';
+        videoThumbnail.alt = 'No thumbnail available';
+    }
+
+    // Title
+    videoTitle.textContent = info.title;
+
+    // Duration
+    if (info.duration) {
+        videoDuration.textContent = formatDuration(info.duration);
+        videoDuration.style.display = 'block';
+    } else {
+        videoDuration.style.display = 'none';
+    }
+
+    // Platform badge
+    const platform = (info.platform || '').toLowerCase();
+    videoPlatformBadge.textContent = info.platform;
+    videoPlatformBadge.className = 'video-platform-badge';
+    if (platform.includes('youtube')) {
+        videoPlatformBadge.classList.add('youtube');
+    } else if (platform.includes('facebook')) {
+        videoPlatformBadge.classList.add('facebook');
+    } else if (platform.includes('tiktok')) {
+        videoPlatformBadge.classList.add('tiktok');
+    } else if (platform.includes('pinterest')) {
+        videoPlatformBadge.classList.add('pinterest');
+    } else if (platform.includes('telegram')) {
+        videoPlatformBadge.classList.add('telegram');
+    } else if (platform.includes('instagram')) {
+        videoPlatformBadge.classList.add('instagram');
+    } else if (platform.includes('twitter') || platform.includes('x.com')) {
+        videoPlatformBadge.classList.add('twitter');
+    } else if (platform.includes('reddit')) {
+        videoPlatformBadge.classList.add('reddit');
+    } else if (platform.includes('vimeo')) {
+        videoPlatformBadge.classList.add('vimeo');
+    } else if (platform.includes('twitch')) {
+        videoPlatformBadge.classList.add('twitch');
+    } else if (platform.includes('dailymotion')) {
+        videoPlatformBadge.classList.add('dailymotion');
+    } else if (platform.includes('linkedin')) {
+        videoPlatformBadge.classList.add('linkedin');
+    }
+
+    // Uploader
+    videoUploader.textContent = `👤 ${info.uploader}`;
+
+    // Views
+    if (info.viewCount) {
+        videoViews.textContent = `👁 ${formatNumber(info.viewCount)} views`;
+        videoViews.style.display = 'flex';
+    } else {
+        videoViews.style.display = 'none';
+    }
+
+    // Quality options
+    qualitySelect.innerHTML = '';
+    info.formats.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.formatId;
+        let label = f.quality;
+        if (f.filesize) {
+            label += ` (${formatFileSize(f.filesize)})`;
+        }
+        if (f.ext) {
+            label += ` — ${f.ext.toUpperCase()}`;
+        }
+        opt.textContent = label;
+        qualitySelect.appendChild(opt);
+    });
+
+    // Add "best" option at the top
+    const bestOpt = document.createElement('option');
+    bestOpt.value = 'best';
+    bestOpt.textContent = '⭐ Best Quality (Recommended)';
+    qualitySelect.insertBefore(bestOpt, qualitySelect.firstChild);
+    qualitySelect.value = 'best';
+
+    // Show card with animation
+    videoCard.style.display = 'block';
+
+    // Scroll to card
+    setTimeout(() => {
+        videoCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+}
+
+// ── DOWNLOAD VIDEO ───────────────────────────────────────────────────────
+async function downloadVideo() {
+    if (!currentVideoUrl) return;
+
+    const selectedFormat = qualitySelect.value;
+    downloadBtn.disabled = true;
+
+    // Show progress
+    downloadProgress.style.display = 'block';
+    progressBarFill.style.width = '0%';
+
+    // Simulate progress since we can't track yt-dlp progress via HTTP
+    const progressInterval = simulateProgress();
+
+    try {
+        const params = new URLSearchParams({
+            url: currentVideoUrl,
+            format: selectedFormat
+        });
+
+        const response = await fetch(`/api/download?${params}`);
+
+        if (!response.ok) {
+            const contentType = response.headers.get('content-type') || '';
+            const errorData = contentType.includes('application/json')
+                ? await response.json().catch(() => ({}))
+                : { error: await response.text().catch(() => '') };
+            throw new Error(errorData.error || 'Download failed');
+        }
+
+        // Complete progress
+        clearInterval(progressInterval);
+        progressBarFill.style.width = '100%';
+
+        // Get filename from Content-Disposition header
+        const disposition = response.headers.get('Content-Disposition');
+        let filename = 'video.mp4';
+        if (disposition) {
+            const match = disposition.match(/filename="?(.+?)"?$/);
+            if (match) filename = decodeURIComponent(match[1]);
+        }
+
+        // Download the blob
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(downloadUrl);
+
+        // Save to history
+        if (currentVideoInfo) {
+            saveToHistory({
+                url: currentVideoUrl,
+                title: currentVideoInfo.title,
+                thumbnail: currentVideoInfo.thumbnail,
+                platform: currentVideoInfo.platform,
+                uploader: currentVideoInfo.uploader,
+                duration: currentVideoInfo.duration,
+                downloadedAt: Date.now()
+            });
+        }
+
+        // Success animation
+        setTimeout(() => {
+            downloadProgress.style.display = 'none';
+            progressBarFill.style.width = '0%';
+        }, 1500);
+
+    } catch (err) {
+        clearInterval(progressInterval);
+        downloadProgress.style.display = 'none';
+        showError(err.message);
+    } finally {
+        downloadBtn.disabled = false;
+    }
+}
+
+// ── PROGRESS SIMULATION ─────────────────────────────────────────────────
+function simulateProgress() {
+    let progress = 0;
+    return setInterval(() => {
+        if (progress < 85) {
+            progress += Math.random() * 8;
+            if (progress > 85) progress = 85;
+            progressBarFill.style.width = `${progress}%`;
+        }
+    }, 500);
+}
+
+// ── HELPERS ──────────────────────────────────────────────────────────────
+function isValidUrl(str) {
+    try {
+        new URL(str);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function formatDuration(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    if (h > 0) {
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function formatNumber(num) {
+    if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + 'B';
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M';
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'K';
+    return num.toString();
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '';
+    if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(1) + ' GB';
+    if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(1) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return bytes + ' B';
+}
+
+function setLoading(loading) {
+    fetchBtn.disabled = loading;
+    if (loading) {
+        fetchBtnText.style.display = 'none';
+        fetchBtnLoader.style.display = 'flex';
+    } else {
+        fetchBtnText.style.display = 'inline';
+        fetchBtnLoader.style.display = 'none';
+    }
+}
+
+function showError(message) {
+    errorText.textContent = message;
+    errorMessage.style.display = 'flex';
+}
+
+function hideError() {
+    errorMessage.style.display = 'none';
+}
+
+// ── DOWNLOAD HISTORY ─────────────────────────────────────────────────────
+function saveToHistory(item) {
+    const history = getHistory();
+    // Remove duplicate URL if exists
+    const filtered = history.filter(h => h.url !== item.url);
+    filtered.unshift(item);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(filtered.slice(0, MAX_HISTORY)));
+    renderHistory();
+}
+
+function getHistory() {
+    try {
+        return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+function renderHistory() {
+    const history = getHistory();
+    if (history.length === 0) {
+        historySection.style.display = 'none';
+        return;
+    }
+
+    historySection.style.display = 'block';
+    historyList.innerHTML = '';
+
+    history.forEach(item => {
+        const p = (item.platform || '').toLowerCase();
+        const platformClass = p.includes('youtube') ? 'youtube'
+            : p.includes('facebook') ? 'facebook'
+            : p.includes('tiktok') ? 'tiktok'
+            : p.includes('pinterest') ? 'pinterest'
+            : p.includes('telegram') ? 'telegram'
+            : p.includes('instagram') ? 'instagram'
+            : p.includes('twitter') || p.includes('x.com') ? 'twitter'
+            : p.includes('reddit') ? 'reddit'
+            : p.includes('vimeo') ? 'vimeo'
+            : p.includes('twitch') ? 'twitch'
+            : p.includes('dailymotion') ? 'dailymotion'
+            : p.includes('linkedin') ? 'linkedin'
+            : '';
+
+        const timeAgo = formatTimeAgo(item.downloadedAt);
+
+        const card = document.createElement('div');
+        card.className = 'history-item';
+        card.innerHTML = `
+            <div class="history-thumb">
+                ${item.thumbnail
+                    ? `<img src="${item.thumbnail}" alt="" loading="lazy">`
+                    : `<div class="history-thumb-placeholder"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>`}
+                ${item.duration ? `<span class="history-duration">${formatDuration(item.duration)}</span>` : ''}
+            </div>
+            <div class="history-info">
+                <p class="history-item-title">${escapeHtml(item.title)}</p>
+                <div class="history-meta">
+                    ${platformClass ? `<span class="history-badge ${platformClass}">${item.platform}</span>` : ''}
+                    <span class="history-time">${timeAgo}</span>
+                </div>
+            </div>
+            <button class="history-dl-btn" title="Download again" data-url="${escapeHtml(item.url)}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+            </button>
+        `;
+
+        card.querySelector('.history-dl-btn').addEventListener('click', () => {
+            urlInput.value = item.url;
+            clearBtn.style.display = 'flex';
+            detectPlatform(item.url);
+            hideError();
+            fetchVideoInfo();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        historyList.appendChild(card);
+    });
+}
+
+function formatTimeAgo(ts) {
+    const diff = Date.now() - ts;
+    const m = Math.floor(diff / 60000);
+    const h = Math.floor(diff / 3600000);
+    const d = Math.floor(diff / 86400000);
+    if (d > 0) return `${d}d ago`;
+    if (h > 0) return `${h}h ago`;
+    if (m > 0) return `${m}m ago`;
+    return 'Just now';
+}
+
+function escapeHtml(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}

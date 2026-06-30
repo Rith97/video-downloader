@@ -1,0 +1,6 @@
+node_modules
+downloads
+.env
+.git
+yt-dlp.exe
+test_android.mp4
