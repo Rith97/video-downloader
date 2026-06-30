@@ -1,5 +1,8 @@
 node_modules/
 downloads/
 .env
+.venv/
 *.log
+*.exe
+*.mp4
 

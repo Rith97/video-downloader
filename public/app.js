@@ -34,6 +34,7 @@ const MAX_HISTORY = 20;
 // ── STATE ────────────────────────────────────────────────────────────────
 let currentVideoUrl = '';
 let currentVideoInfo = null;
+let fetchAbortController = null;
 
 // ── INIT ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -91,21 +92,16 @@ async function checkServerHealth() {
 
 // ── EVENT LISTENERS ──────────────────────────────────────────────────────
 function setupEventListeners() {
-    // URL input changes
     urlInput.addEventListener('input', () => {
         detectPlatform(urlInput.value);
         hideError();
         clearBtn.style.display = urlInput.value ? 'flex' : 'none';
     });
 
-    // Enter key to fetch
     urlInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            fetchVideoInfo();
-        }
+        if (e.key === 'Enter') fetchVideoInfo();
     });
 
-    // Paste button
     pasteBtn.addEventListener('click', async () => {
         try {
             const text = await navigator.clipboard.readText();
@@ -113,7 +109,6 @@ function setupEventListeners() {
             detectPlatform(text);
             hideError();
             clearBtn.style.display = text ? 'flex' : 'none';
-
             pasteBtn.style.color = 'var(--accent-green)';
             setTimeout(() => { pasteBtn.style.color = ''; }, 600);
         } catch {
@@ -121,18 +116,10 @@ function setupEventListeners() {
         }
     });
 
-    // Clear button
-    clearBtn.addEventListener('click', () => {
-        clearInput();
-    });
-
-    // Fetch button
+    clearBtn.addEventListener('click', clearInput);
     fetchBtn.addEventListener('click', fetchVideoInfo);
-
-    // Download button
     downloadBtn.addEventListener('click', downloadVideo);
 
-    // History clear
     historyClearBtn.addEventListener('click', () => {
         localStorage.removeItem(HISTORY_KEY);
         renderHistory();
@@ -147,6 +134,10 @@ function setupEventListeners() {
         javeng:      'https://javeng.tv',
         javgg:       'https://javgg.net',
         missav:      'https://missav.com/en',
+        pornhub:     'https://www.pornhub.com',
+        xvideos:     'https://www.xvideos.com',
+        bilibili:    'https://www.bilibili.com',
+        rumble:      'https://rumble.com',
         pinterest:   'https://www.pinterest.com',
         telegram:    'https://web.telegram.org',
         instagram:   'https://www.instagram.com',
@@ -183,119 +174,37 @@ function clearInput() {
 // ── PLATFORM DETECTION ───────────────────────────────────────────────────
 function detectPlatform(url) {
     const platforms = {
-        youtube: {
-            patterns: [/youtube\.com/, /youtu\.be/, /youtube-nocookie\.com/],
-            icon: '🔴',
-            name: 'YouTube',
-            color: 'youtube'
-        },
-        facebook: {
-            patterns: [/facebook\.com/, /fb\.watch/, /fb\.com/],
-            icon: '🔵',
-            name: 'Facebook',
-            color: 'facebook'
-        },
-        tiktok: {
-            patterns: [/tiktok\.com/, /vm\.tiktok\.com/],
-            icon: '⚫',
-            name: 'TikTok',
-            color: 'tiktok'
-        },
-        pinterest: {
-            patterns: [/pinterest\.com/, /pin\.it/, /pinterest\.\w{2,3}/],
-            icon: '📌',
-            name: 'Pinterest',
-            color: 'pinterest'
-        },
-        telegram: {
-            patterns: [/t\.me/, /telegram\.me/, /telegram\.org/],
-            icon: '✈️',
-            name: 'Telegram',
-            color: 'telegram'
-        },
-        instagram: {
-            patterns: [/instagram\.com/, /instagr\.am/],
-            icon: '📷',
-            name: 'Instagram',
-            color: 'instagram'
-        },
-        twitter: {
-            patterns: [/twitter\.com/, /x\.com/, /t\.co/],
-            icon: '🐦',
-            name: 'X / Twitter',
-            color: 'twitter'
-        },
-        reddit: {
-            patterns: [/reddit\.com/, /redd\.it/, /v\.redd\.it/],
-            icon: '🤖',
-            name: 'Reddit',
-            color: 'reddit'
-        },
-        vimeo: {
-            patterns: [/vimeo\.com/],
-            icon: '🎬',
-            name: 'Vimeo',
-            color: 'vimeo'
-        },
-        twitch: {
-            patterns: [/twitch\.tv/, /clips\.twitch\.tv/],
-            icon: '🎮',
-            name: 'Twitch',
-            color: 'twitch'
-        },
-        dailymotion: {
-            patterns: [/dailymotion\.com/, /dai\.ly/],
-            icon: '▶️',
-            name: 'Dailymotion',
-            color: 'dailymotion'
-        },
-        javguru: {
-            patterns: [/jav\.guru/],
-            icon: 'J',
-            name: 'JAV Guru',
-            color: 'jav'
-        },
-        javeng: {
-            patterns: [/javeng\.tv/, /javeng\.com/],
-            icon: 'J',
-            name: 'JAV Eng',
-            color: 'jav'
-        },
-        javgg: {
-            patterns: [/javgg\.net/],
-            icon: 'J',
-            name: 'JAVGG',
-            color: 'jav'
-        },
-        missav: {
-            patterns: [/missav\./],
-            icon: 'M',
-            name: 'MissAV',
-            color: 'missav'
-        },
-        linkedin: {
-            patterns: [/linkedin\.com/],
-            icon: '💼',
-            name: 'LinkedIn',
-            color: 'linkedin'
-        }
+        youtube:     { patterns: [/youtube\.com/, /youtu\.be/, /youtube-nocookie\.com/], icon: '🔴', name: 'YouTube',     color: 'youtube' },
+        facebook:    { patterns: [/facebook\.com/, /fb\.watch/, /fb\.com/],             icon: '🔵', name: 'Facebook',    color: 'facebook' },
+        tiktok:      { patterns: [/tiktok\.com/, /vm\.tiktok\.com/],                    icon: '⚫', name: 'TikTok',      color: 'tiktok' },
+        javguru:     { patterns: [/jav\.guru/],                                          icon: 'J',  name: 'JAV Guru',   color: 'jav' },
+        javeng:      { patterns: [/javeng\.tv/, /javeng\.com/],                          icon: 'J',  name: 'JAV Eng',    color: 'jav' },
+        javgg:       { patterns: [/javgg\.net/],                                         icon: 'J',  name: 'JAVGG',      color: 'jav' },
+        missav:      { patterns: [/missav\./],                                           icon: 'M',  name: 'MissAV',     color: 'missav' },
+        pornhub:     { patterns: [/pornhub\.com/],                                       icon: 'P',  name: 'Pornhub',    color: 'pornhub' },
+        xvideos:     { patterns: [/xvideos\.com/, /xvideos2\.com/],                     icon: 'X',  name: 'XVideos',    color: 'xvideos' },
+        bilibili:    { patterns: [/bilibili\.com/, /b23\.tv/],                           icon: 'B',  name: 'Bilibili',   color: 'bilibili' },
+        rumble:      { patterns: [/rumble\.com/],                                        icon: 'R',  name: 'Rumble',     color: 'rumble' },
+        pinterest:   { patterns: [/pinterest\.com/, /pin\.it/, /pinterest\.\w{2,3}/],   icon: '📌', name: 'Pinterest',  color: 'pinterest' },
+        telegram:    { patterns: [/t\.me/, /telegram\.me/, /telegram\.org/],            icon: '✈️', name: 'Telegram',   color: 'telegram' },
+        instagram:   { patterns: [/instagram\.com/, /instagr\.am/],                     icon: '📷', name: 'Instagram',  color: 'instagram' },
+        twitter:     { patterns: [/twitter\.com/, /x\.com/, /t\.co/],                   icon: '🐦', name: 'X / Twitter',color: 'twitter' },
+        reddit:      { patterns: [/reddit\.com/, /redd\.it/, /v\.redd\.it/],            icon: '🤖', name: 'Reddit',     color: 'reddit' },
+        vimeo:       { patterns: [/vimeo\.com/],                                         icon: '🎬', name: 'Vimeo',      color: 'vimeo' },
+        twitch:      { patterns: [/twitch\.tv/, /clips\.twitch\.tv/],                   icon: '🎮', name: 'Twitch',     color: 'twitch' },
+        dailymotion: { patterns: [/dailymotion\.com/, /dai\.ly/],                       icon: '▶️', name: 'Dailymotion',color: 'dailymotion' },
+        linkedin:    { patterns: [/linkedin\.com/],                                      icon: '💼', name: 'LinkedIn',   color: 'linkedin' },
     };
 
-    // Reset platform chips
-    document.querySelectorAll('.platform-chip').forEach(chip => {
-        chip.classList.remove('active');
-    });
+    document.querySelectorAll('.platform-chip').forEach(chip => chip.classList.remove('active'));
 
     for (const [key, platform] of Object.entries(platforms)) {
         if (platform.patterns.some(p => p.test(url))) {
             detectedPlatform.style.display = 'flex';
             platformIcon.textContent = platform.icon;
             platformName.textContent = platform.name;
-
-            // Highlight matching chip
             const chip = document.querySelector(`.platform-chip[data-platform="${key}"]`);
             if (chip) chip.classList.add('active');
-
             return key;
         }
     }
@@ -308,15 +217,14 @@ function detectPlatform(url) {
 async function fetchVideoInfo() {
     const url = urlInput.value.trim();
 
-    if (!url) {
-        showError('Please paste a video URL first.');
-        return;
-    }
+    if (!url) { showError('Please paste a video URL first.'); return; }
+    if (!isValidUrl(url)) { showError('Please enter a valid URL.'); return; }
 
-    if (!isValidUrl(url)) {
-        showError('Please enter a valid URL.');
-        return;
-    }
+    // Cancel any in-flight request
+    if (fetchAbortController) fetchAbortController.abort();
+    fetchAbortController = new AbortController();
+    const signal = fetchAbortController.signal;
+    const timeout = setTimeout(() => fetchAbortController.abort(), 60000);
 
     setLoading(true);
     hideError();
@@ -326,41 +234,46 @@ async function fetchVideoInfo() {
         const res = await fetch('/api/info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url })
+            body: JSON.stringify({ url }),
+            signal,
         });
 
         const contentType = res.headers.get('content-type') || '';
         const data = contentType.includes('application/json') ? await res.json() : { error: await res.text() };
 
-        if (!res.ok) {
-            throw new Error(data.error || 'Failed to fetch video info');
-        }
+        if (!res.ok) throw new Error(data.error || 'Failed to fetch video info');
 
         currentVideoUrl = url;
         currentVideoInfo = data;
         displayVideoInfo(data);
     } catch (err) {
-        showError(err.message);
+        if (err.name === 'AbortError') {
+            showError('Request timed out. The site may be slow or the video may be unavailable.');
+        } else {
+            showError(err.message);
+        }
     } finally {
+        clearTimeout(timeout);
         setLoading(false);
     }
 }
 
 // ── DISPLAY VIDEO INFO ──────────────────────────────────────────────────
 function displayVideoInfo(info) {
-    // Thumbnail
     if (info.thumbnail) {
         videoThumbnail.src = info.thumbnail;
         videoThumbnail.alt = info.title;
+        videoThumbnail.onerror = () => {
+            videoThumbnail.src = '';
+            videoThumbnail.alt = 'No thumbnail available';
+        };
     } else {
         videoThumbnail.src = '';
         videoThumbnail.alt = 'No thumbnail available';
     }
 
-    // Title
     videoTitle.textContent = info.title;
 
-    // Duration
     if (info.duration) {
         videoDuration.textContent = formatDuration(info.duration);
         videoDuration.style.display = 'block';
@@ -372,40 +285,11 @@ function displayVideoInfo(info) {
     const platform = (info.platform || '').toLowerCase();
     videoPlatformBadge.textContent = info.platform;
     videoPlatformBadge.className = 'video-platform-badge';
-    if (platform.includes('youtube')) {
-        videoPlatformBadge.classList.add('youtube');
-    } else if (platform.includes('facebook')) {
-        videoPlatformBadge.classList.add('facebook');
-    } else if (platform.includes('tiktok')) {
-        videoPlatformBadge.classList.add('tiktok');
-    } else if (platform.includes('pinterest')) {
-        videoPlatformBadge.classList.add('pinterest');
-    } else if (platform.includes('telegram')) {
-        videoPlatformBadge.classList.add('telegram');
-    } else if (platform.includes('instagram')) {
-        videoPlatformBadge.classList.add('instagram');
-    } else if (platform.includes('twitter') || platform.includes('x.com')) {
-        videoPlatformBadge.classList.add('twitter');
-    } else if (platform.includes('reddit')) {
-        videoPlatformBadge.classList.add('reddit');
-    } else if (platform.includes('vimeo')) {
-        videoPlatformBadge.classList.add('vimeo');
-    } else if (platform.includes('twitch')) {
-        videoPlatformBadge.classList.add('twitch');
-    } else if (platform.includes('dailymotion')) {
-        videoPlatformBadge.classList.add('dailymotion');
-    } else if (platform.includes('jav') || platform.includes('guru')) {
-        videoPlatformBadge.classList.add('jav');
-    } else if (platform.includes('missav')) {
-        videoPlatformBadge.classList.add('missav');
-    } else if (platform.includes('linkedin')) {
-        videoPlatformBadge.classList.add('linkedin');
-    }
+    const badgeClass = platformToClass(platform);
+    if (badgeClass) videoPlatformBadge.classList.add(badgeClass);
 
-    // Uploader
     videoUploader.textContent = `👤 ${info.uploader}`;
 
-    // Views
     if (info.viewCount) {
         videoViews.textContent = `👁 ${formatNumber(info.viewCount)} views`;
         videoViews.style.display = 'flex';
@@ -413,36 +297,53 @@ function displayVideoInfo(info) {
         videoViews.style.display = 'none';
     }
 
-    // Quality options
+    // Quality options — only insert the ⭐ shortcut when multiple formats
+    // exist; single-format sites (javgg, missav, browser) already return
+    // formatId='best' so we'd otherwise get two identical options.
     qualitySelect.innerHTML = '';
     info.formats.forEach(f => {
         const opt = document.createElement('option');
         opt.value = f.formatId;
         let label = f.quality;
-        if (f.filesize) {
-            label += ` (${formatFileSize(f.filesize)})`;
-        }
-        if (f.ext) {
-            label += ` — ${f.ext.toUpperCase()}`;
-        }
+        if (f.filesize) label += ` (${formatFileSize(f.filesize)})`;
+        if (f.ext) label += ` — ${f.ext.toUpperCase()}`;
         opt.textContent = label;
         qualitySelect.appendChild(opt);
     });
 
-    // Add "best" option at the top
-    const bestOpt = document.createElement('option');
-    bestOpt.value = 'best';
-    bestOpt.textContent = '⭐ Best Quality (Recommended)';
-    qualitySelect.insertBefore(bestOpt, qualitySelect.firstChild);
+    if (info.formats.length > 1) {
+        const bestOpt = document.createElement('option');
+        bestOpt.value = 'best';
+        bestOpt.textContent = '⭐ Best Quality (Recommended)';
+        qualitySelect.insertBefore(bestOpt, qualitySelect.firstChild);
+    }
     qualitySelect.value = 'best';
 
-    // Show card with animation
     videoCard.style.display = 'block';
+    setTimeout(() => videoCard.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+}
 
-    // Scroll to card
-    setTimeout(() => {
-        videoCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
+// ── PLATFORM → CSS CLASS ─────────────────────────────────────────────────
+function platformToClass(p) {
+    if (p.includes('youtube'))                   return 'youtube';
+    if (p.includes('facebook'))                  return 'facebook';
+    if (p.includes('tiktok'))                    return 'tiktok';
+    if (p.includes('pinterest'))                 return 'pinterest';
+    if (p.includes('telegram'))                  return 'telegram';
+    if (p.includes('instagram'))                 return 'instagram';
+    if (p.includes('twitter') || p.includes('x.com')) return 'twitter';
+    if (p.includes('reddit'))                    return 'reddit';
+    if (p.includes('vimeo'))                     return 'vimeo';
+    if (p.includes('twitch'))                    return 'twitch';
+    if (p.includes('dailymotion'))               return 'dailymotion';
+    if (p.includes('linkedin'))                  return 'linkedin';
+    if (p.includes('pornhub'))                   return 'pornhub';
+    if (p.includes('xvideo'))                    return 'xvideos';
+    if (p.includes('bilibili'))                  return 'bilibili';
+    if (p.includes('rumble'))                    return 'rumble';
+    if (p.includes('jav') || p.includes('guru')) return 'jav';
+    if (p.includes('missav'))                    return 'missav';
+    return '';
 }
 
 // ── DOWNLOAD VIDEO ───────────────────────────────────────────────────────
@@ -451,52 +352,79 @@ async function downloadVideo() {
 
     const selectedFormat = qualitySelect.value;
     downloadBtn.disabled = true;
-
     downloadProgress.style.display = 'block';
     progressBarFill.style.width = '0%';
 
-    const progressInterval = simulateProgress();
+    if (currentVideoInfo) {
+        saveToHistory({
+            url: currentVideoUrl,
+            title: currentVideoInfo.title,
+            thumbnail: currentVideoInfo.thumbnail,
+            platform: currentVideoInfo.platform,
+            uploader: currentVideoInfo.uploader,
+            duration: currentVideoInfo.duration,
+            downloadedAt: Date.now()
+        });
+    }
+
+    // Fake progress (0→85%) while the server processes / runs yt-dlp.
+    // Replaced by real progress once the file transfer begins.
+    const fakeInterval = simulateProgress();
 
     try {
-        const params = new URLSearchParams({
-            url: currentVideoUrl,
-            format: selectedFormat
-        });
+        const params = new URLSearchParams({ url: currentVideoUrl, format: selectedFormat });
+        const response = await fetch(`/api/download?${params}`);
 
-        // Save to history before triggering download
-        if (currentVideoInfo) {
-            saveToHistory({
-                url: currentVideoUrl,
-                title: currentVideoInfo.title,
-                thumbnail: currentVideoInfo.thumbnail,
-                platform: currentVideoInfo.platform,
-                uploader: currentVideoInfo.uploader,
-                duration: currentVideoInfo.duration,
-                downloadedAt: Date.now()
-            });
+        clearInterval(fakeInterval);
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok || contentType.includes('application/json')) {
+            const errData = await response.json().catch(() => ({ error: `Server error ${response.status}` }));
+            throw new Error(errData.error || 'Download failed');
         }
 
-        // Use native browser download — no RAM buffering, works on Android & iOS.
-        // The server sends Content-Disposition: attachment which triggers the
-        // save dialog without needing a blob URL (which fails on iOS Safari).
-        const link = document.createElement('a');
-        link.href = `/api/download?${params}`;
-        link.setAttribute('download', '');
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        // Parse filename from Content-Disposition
+        const cd = response.headers.get('content-disposition') || '';
+        const fnMatch = cd.match(/filename[^;=\n]*=\s*(?:UTF-8'')?["']?([^"';\r\n]+)/i);
+        const filename = fnMatch ? decodeURIComponent(fnMatch[1].trim().replace(/["']$/, '')) : 'video.mp4';
 
-        clearInterval(progressInterval);
+        // Stream response so we can show real download progress (85→99%)
+        // and create a blob URL without a second network request.
+        const total = parseInt(response.headers.get('content-length') || '0', 10);
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+
+        progressBarFill.style.width = '85%';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            if (total > 0) {
+                progressBarFill.style.width = `${85 + (received / total) * 14}%`;
+            }
+        }
+
+        const blob = new Blob(chunks, { type: contentType || 'video/mp4' });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+
         progressBarFill.style.width = '100%';
-
         setTimeout(() => {
             downloadProgress.style.display = 'none';
             progressBarFill.style.width = '0%';
-        }, 1500);
+        }, 800);
 
     } catch (err) {
-        clearInterval(progressInterval);
+        clearInterval(fakeInterval);
         downloadProgress.style.display = 'none';
         showError(err.message);
     } finally {
@@ -518,22 +446,14 @@ function simulateProgress() {
 
 // ── HELPERS ──────────────────────────────────────────────────────────────
 function isValidUrl(str) {
-    try {
-        new URL(str);
-        return true;
-    } catch {
-        return false;
-    }
+    try { new URL(str); return true; } catch { return false; }
 }
 
 function formatDuration(seconds) {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
-
-    if (h > 0) {
-        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    }
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
@@ -575,7 +495,6 @@ function hideError() {
 // ── DOWNLOAD HISTORY ─────────────────────────────────────────────────────
 function saveToHistory(item) {
     const history = getHistory();
-    // Remove duplicate URL if exists
     const filtered = history.filter(h => h.url !== item.url);
     filtered.unshift(item);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(filtered.slice(0, MAX_HISTORY)));
@@ -583,41 +502,19 @@ function saveToHistory(item) {
 }
 
 function getHistory() {
-    try {
-        return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-    } catch {
-        return [];
-    }
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+    catch { return []; }
 }
 
 function renderHistory() {
     const history = getHistory();
-    if (history.length === 0) {
-        historySection.style.display = 'none';
-        return;
-    }
+    if (history.length === 0) { historySection.style.display = 'none'; return; }
 
     historySection.style.display = 'block';
     historyList.innerHTML = '';
 
     history.forEach(item => {
-        const p = (item.platform || '').toLowerCase();
-        const platformClass = p.includes('youtube') ? 'youtube'
-            : p.includes('facebook') ? 'facebook'
-            : p.includes('tiktok') ? 'tiktok'
-            : p.includes('pinterest') ? 'pinterest'
-            : p.includes('telegram') ? 'telegram'
-            : p.includes('instagram') ? 'instagram'
-            : p.includes('twitter') || p.includes('x.com') ? 'twitter'
-            : p.includes('reddit') ? 'reddit'
-            : p.includes('vimeo') ? 'vimeo'
-            : p.includes('twitch') ? 'twitch'
-            : p.includes('dailymotion') ? 'dailymotion'
-            : p.includes('jav') || p.includes('guru') ? 'jav'
-            : p.includes('missav') ? 'missav'
-            : p.includes('linkedin') ? 'linkedin'
-            : '';
-
+        const platformClass = platformToClass((item.platform || '').toLowerCase());
         const timeAgo = formatTimeAgo(item.downloadedAt);
 
         const card = document.createElement('div');
@@ -625,14 +522,14 @@ function renderHistory() {
         card.innerHTML = `
             <div class="history-thumb">
                 ${item.thumbnail
-                    ? `<img src="${item.thumbnail}" alt="" loading="lazy">`
+                    ? `<img src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy">`
                     : `<div class="history-thumb-placeholder"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>`}
                 ${item.duration ? `<span class="history-duration">${formatDuration(item.duration)}</span>` : ''}
             </div>
             <div class="history-info">
                 <p class="history-item-title">${escapeHtml(item.title)}</p>
                 <div class="history-meta">
-                    ${platformClass ? `<span class="history-badge ${platformClass}">${item.platform}</span>` : ''}
+                    ${platformClass ? `<span class="history-badge ${platformClass}">${escapeHtml(item.platform)}</span>` : ''}
                     <span class="history-time">${timeAgo}</span>
                 </div>
             </div>
@@ -670,5 +567,10 @@ function formatTimeAgo(ts) {
 }
 
 function escapeHtml(str) {
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }

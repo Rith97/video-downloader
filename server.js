@@ -27,11 +27,13 @@ let ytDlpWrap = null;
 let ytDlpAvailable = true;
 let ytDlpErrorMessage = '';
 
-const venvYtDlp = path.join(__dirname, '.venv', 'Scripts', 'yt-dlp.exe');
+const venvYtDlp = process.platform === 'win32'
+    ? path.join(__dirname, '.venv', 'Scripts', 'yt-dlp.exe')
+    : path.join(__dirname, '.venv', 'bin', 'yt-dlp');
 const localBinary = path.join(__dirname, 'yt-dlp.exe');
 const candidateBinaries = [];
 
-if (process.platform === 'win32' && fs.existsSync(venvYtDlp)) {
+if (fs.existsSync(venvYtDlp)) {
     candidateBinaries.push(venvYtDlp);
 }
 if (process.platform === 'win32' && fs.existsSync(localBinary)) {
@@ -61,6 +63,27 @@ function sendYtDlpUnavailable(res) {
     return res.status(503).json({
         error: ytDlpErrorMessage || 'yt-dlp is currently unavailable.'
     });
+}
+
+// Short-lived cache of extracted video data (avoids re-fetching the same
+// page between /api/info and the immediately-following /api/download).
+const extractCache = new Map();
+const CACHE_TTL_MS = 4 * 60 * 1000; // 4 minutes
+
+function setExtractCache(url, data) {
+    extractCache.set(url, { data, ts: Date.now() });
+    for (const [k, v] of extractCache) {
+        if (Date.now() - v.ts > CACHE_TTL_MS) extractCache.delete(k);
+    }
+}
+
+function getExtractCache(url) {
+    const entry = extractCache.get(url);
+    if (!entry || Date.now() - entry.ts > CACHE_TTL_MS) {
+        extractCache.delete(url);
+        return null;
+    }
+    return entry.data;
 }
 
 // Extra args per site
@@ -424,6 +447,7 @@ app.post('/api/info', async (req, res) => {
     if (isCurlSite(url)) {
         try {
             const data = await getJavggVideoUrl(url);
+            setExtractCache(url, { type: 'javgg', ...data });
             return res.json({
                 title: data.title || 'JAV Video',
                 thumbnail: data.thumbnail || null,
@@ -434,8 +458,6 @@ app.post('/api/info', async (req, res) => {
                 formats: [
                     { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
                 ],
-                _javggM3u8: data.m3u8,
-                _javggReferer: data.referer,
             });
         } catch (err) {
             return res.status(500).json({ error: 'Could not fetch video info: ' + err.message });
@@ -446,6 +468,7 @@ app.post('/api/info', async (req, res) => {
     if (isMissavSite(url)) {
         try {
             const data = await getMissavVideoUrl(url);
+            setExtractCache(url, { type: 'missav', ...data });
             return res.json({
                 title: data.title || 'MissAV Video',
                 thumbnail: data.thumbnail || null,
@@ -558,8 +581,10 @@ app.get('/api/download', async (req, res) => {
 
     // curl-based download for javgg.net
     if (isCurlSite(url)) {
+        if (!ytDlpAvailable || !ytDlpWrap) return sendYtDlpUnavailable(res);
         try {
-            const data = await getJavggVideoUrl(url);
+            const cached = getExtractCache(url);
+            const data = (cached?.type === 'javgg') ? cached : await getJavggVideoUrl(url);
             const args = [
                 data.m3u8,
                 '--ffmpeg-location', ffmpegStatic,
@@ -601,12 +626,11 @@ app.get('/api/download', async (req, res) => {
 
     // curl-based download for MissAV pages
     if (isMissavSite(url)) {
-        if (!ytDlpAvailable || !ytDlpWrap) {
-            return sendYtDlpUnavailable(res);
-        }
+        if (!ytDlpAvailable || !ytDlpWrap) return sendYtDlpUnavailable(res);
 
         try {
-            const data = await getMissavVideoUrl(url);
+            const cached = getExtractCache(url);
+            const data = (cached?.type === 'missav') ? cached : await getMissavVideoUrl(url);
             const args = [
                 data.videoUrl,
                 '--ffmpeg-location', ffmpegStatic,

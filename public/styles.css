@@ -36,6 +36,10 @@
     --linkedin-color: #0A66C2;
     --jav-color: #F97316;
     --missav-color: #10B981;
+    --pornhub-color: #FF9000;
+    --xvideos-color: #D00000;
+    --bilibili-color: #00AEEC;
+    --rumble-color: #85C742;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.5);
@@ -480,6 +484,58 @@ body {
     box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
 }
 
+.platform-chip[data-platform="pornhub"]:hover {
+    color: var(--pornhub-color);
+    border-color: rgba(255, 144, 0, 0.2);
+    background: rgba(255, 144, 0, 0.06);
+}
+
+.platform-chip.active[data-platform="pornhub"] {
+    color: var(--pornhub-color);
+    border-color: rgba(255, 144, 0, 0.3);
+    background: rgba(255, 144, 0, 0.1);
+    box-shadow: 0 0 20px rgba(255, 144, 0, 0.1);
+}
+
+.platform-chip[data-platform="xvideos"]:hover {
+    color: var(--xvideos-color);
+    border-color: rgba(208, 0, 0, 0.2);
+    background: rgba(208, 0, 0, 0.06);
+}
+
+.platform-chip.active[data-platform="xvideos"] {
+    color: var(--xvideos-color);
+    border-color: rgba(208, 0, 0, 0.3);
+    background: rgba(208, 0, 0, 0.1);
+    box-shadow: 0 0 20px rgba(208, 0, 0, 0.1);
+}
+
+.platform-chip[data-platform="bilibili"]:hover {
+    color: var(--bilibili-color);
+    border-color: rgba(0, 174, 236, 0.2);
+    background: rgba(0, 174, 236, 0.06);
+}
+
+.platform-chip.active[data-platform="bilibili"] {
+    color: var(--bilibili-color);
+    border-color: rgba(0, 174, 236, 0.3);
+    background: rgba(0, 174, 236, 0.1);
+    box-shadow: 0 0 20px rgba(0, 174, 236, 0.1);
+}
+
+.platform-chip[data-platform="rumble"]:hover {
+    color: var(--rumble-color);
+    border-color: rgba(133, 199, 66, 0.2);
+    background: rgba(133, 199, 66, 0.06);
+}
+
+.platform-chip.active[data-platform="rumble"] {
+    color: var(--rumble-color);
+    border-color: rgba(133, 199, 66, 0.3);
+    background: rgba(133, 199, 66, 0.1);
+    box-shadow: 0 0 20px rgba(133, 199, 66, 0.1);
+}
+
 /* ── INPUT SECTION ────────────────────────────────────────────────────── */
 .input-section {
     margin-bottom: 20px;
@@ -796,6 +852,26 @@ body {
 .video-platform-badge.missav {
     background: rgba(16, 185, 129, 0.9);
     color: white;
+}
+
+.video-platform-badge.pornhub {
+    background: rgba(255, 144, 0, 0.9);
+    color: #1a1a1a;
+}
+
+.video-platform-badge.xvideos {
+    background: rgba(208, 0, 0, 0.9);
+    color: white;
+}
+
+.video-platform-badge.bilibili {
+    background: rgba(0, 174, 236, 0.9);
+    color: white;
+}
+
+.video-platform-badge.rumble {
+    background: rgba(133, 199, 66, 0.9);
+    color: #1a1a1a;
 }
 
 .video-info {
@@ -1156,6 +1232,10 @@ body {
 .history-badge.linkedin   { background: rgba(10,102,194,0.15);  color: var(--linkedin-color); }
 .history-badge.jav        { background: rgba(249,115,22,0.15);  color: var(--jav-color); }
 .history-badge.missav     { background: rgba(16,185,129,0.15);  color: var(--missav-color); }
+.history-badge.pornhub    { background: rgba(255,144,0,0.15);   color: var(--pornhub-color); }
+.history-badge.xvideos    { background: rgba(208,0,0,0.15);     color: var(--xvideos-color); }
+.history-badge.bilibili   { background: rgba(0,174,236,0.15);   color: var(--bilibili-color); }
+.history-badge.rumble     { background: rgba(133,199,66,0.15);  color: var(--rumble-color); }
 
 .history-time {
     font-size: 0.72rem;
