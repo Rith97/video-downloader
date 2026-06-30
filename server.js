@@ -107,6 +107,44 @@ function friendlyError(raw) {
     return 'Download failed. The video may be private, restricted, or the URL is invalid.';
 }
 
+// ── CURL-SITE EXTRACTION (javgg.net — no browser needed) ─────────────────
+
+const CURL_SITES = /javgg\.net/i;
+
+function isCurlSite(url) { return CURL_SITES.test(url); }
+
+async function getJavggVideoUrl(pageUrl) {
+    const code = `
+import sys, json, re
+from curl_cffi import requests
+
+page_url = sys.argv[1]
+r = requests.get(page_url, impersonate='chrome124', timeout=20, allow_redirects=True)
+if r.status_code != 200:
+    print(json.dumps({'error': f'Page returned {r.status_code}'})); raise SystemExit(0)
+
+embed = re.search(r'(https://javggvideo\\.xyz/t/[a-z0-9]+)', r.text)
+if not embed:
+    print(json.dumps({'error': 'No javggvideo embed found on page'})); raise SystemExit(0)
+
+r2 = requests.get(embed.group(1), impersonate='chrome124',
+    headers={'Referer': page_url}, timeout=15)
+m3u8s = re.findall(r'https?://[^\\s\\"\\x27<>]+\\.m3u8[^\\s\\"\\x27<>]*', r2.text)
+if not m3u8s:
+    print(json.dumps({'error': 'No m3u8 in embed page'})); raise SystemExit(0)
+
+og_title = re.search(r'property="og:title"[^>]*content="([^"]+)"', r.text)
+og_img   = re.search(r'property="og:image"[^>]*content="([^"]+)"', r.text)
+title = og_title.group(1).strip() if og_title else 'JAV Video'
+print(json.dumps({'m3u8': m3u8s[0], 'referer': embed.group(1), 'title': title,
+    'thumbnail': og_img.group(1).strip() if og_img else ''}))
+`.trim();
+    const out = await runPythonScript(code, [pageUrl]);
+    const data = JSON.parse(out);
+    if (data.error) throw new Error(data.error);
+    return data;
+}
+
 // ── BROWSER-SITE EXTRACTION (jav.guru, javeng.tv) ────────────────────────
 
 const BROWSER_SITES = /jav\.guru|javeng\.tv|javeng\.com/i;
@@ -331,6 +369,28 @@ app.post('/api/info', async (req, res) => {
         return res.status(400).json({ error: 'URL is required' });
     }
 
+    // curl-based extraction for javgg.net
+    if (isCurlSite(url)) {
+        try {
+            const data = await getJavggVideoUrl(url);
+            return res.json({
+                title: data.title || 'JAV Video',
+                thumbnail: data.thumbnail || null,
+                duration: 0,
+                uploader: 'javgg.net',
+                platform: 'javgg.net',
+                viewCount: 0,
+                formats: [
+                    { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
+                ],
+                _javggM3u8: data.m3u8,
+                _javggReferer: data.referer,
+            });
+        } catch (err) {
+            return res.status(500).json({ error: 'Could not fetch video info: ' + err.message });
+        }
+    }
+
     // Browser-based extraction for JAV sites
     if (isBrowserSite(url)) {
         try {
@@ -425,6 +485,47 @@ app.get('/api/download', async (req, res) => {
     const timestamp = Date.now();
     const outputTemplate = path.join(DOWNLOADS_DIR, `%(title)s_${timestamp}.%(ext)s`);
 
+    // curl-based download for javgg.net
+    if (isCurlSite(url)) {
+        try {
+            const data = await getJavggVideoUrl(url);
+            const args = [
+                data.m3u8,
+                '--ffmpeg-location', ffmpegStatic,
+                '-o', outputTemplate,
+                '--no-warnings',
+                '--add-header', `Referer:${data.referer}`,
+                '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                '--merge-output-format', 'mp4',
+                '-f', 'best',
+            ];
+            await new Promise((resolve, reject) => {
+                const emitter = ytDlpWrap.exec(args);
+                let stderr = '';
+                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
+                emitter.on('error', reject);
+                emitter.on('close', code => {
+                    if (code === 0) resolve();
+                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+                });
+            });
+            const files = fs.readdirSync(DOWNLOADS_DIR)
+                .filter(f => f.includes(`_${timestamp}`))
+                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
+                .sort((a, b) => b.time - a.time);
+            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
+            const file = files[0];
+            const cleanName = file.name.replace(`_${timestamp}`, '');
+            res.download(file.path, cleanName, () => {
+                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+            });
+        } catch (err) {
+            console.error('javgg.net download error:', err.message);
+            res.status(500).json({ error: err.message || 'javgg.net download failed.' });
+        }
+        return;
+    }
+
     // Browser-based download for JAV sites
     if (isBrowserSite(url)) {
         let cookiePath = null;
@@ -470,7 +571,13 @@ app.get('/api/download', async (req, res) => {
             });
         } catch (err) {
             console.error('Browser download error:', err.message);
-            res.status(500).json({ error: err.message || 'Browser extraction failed.' });
+            let msg = err.message || 'Browser extraction failed.';
+            if (/403|UserProjectAccountProblem|unable to download/i.test(msg)) {
+                msg = 'This video\'s CDN is currently unavailable (server-side billing issue). Please try again later or check if the site has restored their video hosting.';
+            } else if (/521|522|502|Bad Gateway/i.test(msg)) {
+                msg = 'The video CDN is down. Please try again later.';
+            }
+            res.status(500).json({ error: msg });
         } finally {
             if (cookiePath) try { fs.unlinkSync(cookiePath); } catch {}
         }
