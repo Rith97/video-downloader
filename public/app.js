@@ -35,6 +35,7 @@ const MAX_HISTORY = 20;
 let currentVideoUrl = '';
 let currentVideoInfo = null;
 let fetchAbortController = null;
+let downloadAbortController = null;
 
 // ── INIT ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -136,6 +137,9 @@ function setupEventListeners() {
         missav:      'https://missav.com/en',
         pornhub:     'https://www.pornhub.com',
         xvideos:     'https://www.xvideos.com',
+        spankbang:   'https://www.spankbang.com',
+        redtube:     'https://www.redtube.com',
+        eporner:     'https://www.eporner.com',
         bilibili:    'https://www.bilibili.com',
         rumble:      'https://rumble.com',
         pinterest:   'https://www.pinterest.com',
@@ -183,6 +187,9 @@ function detectPlatform(url) {
         missav:      { patterns: [/missav\./],                                           icon: 'M',  name: 'MissAV',     color: 'missav' },
         pornhub:     { patterns: [/pornhub\.com/],                                       icon: 'P',  name: 'Pornhub',    color: 'pornhub' },
         xvideos:     { patterns: [/xvideos\.com/, /xvideos2\.com/],                     icon: 'X',  name: 'XVideos',    color: 'xvideos' },
+        spankbang:   { patterns: [/spankbang\.com/, /spankbang\.party/],                icon: 'S',  name: 'SpankBang',  color: 'spankbang' },
+        redtube:     { patterns: [/redtube\.com/],                                       icon: 'R',  name: 'RedTube',    color: 'redtube' },
+        eporner:     { patterns: [/eporner\.com/],                                       icon: 'E',  name: 'Eporner',    color: 'eporner' },
         bilibili:    { patterns: [/bilibili\.com/, /b23\.tv/],                           icon: 'B',  name: 'Bilibili',   color: 'bilibili' },
         rumble:      { patterns: [/rumble\.com/],                                        icon: 'R',  name: 'Rumble',     color: 'rumble' },
         pinterest:   { patterns: [/pinterest\.com/, /pin\.it/, /pinterest\.\w{2,3}/],   icon: '📌', name: 'Pinterest',  color: 'pinterest' },
@@ -339,6 +346,9 @@ function platformToClass(p) {
     if (p.includes('linkedin'))                  return 'linkedin';
     if (p.includes('pornhub'))                   return 'pornhub';
     if (p.includes('xvideo'))                    return 'xvideos';
+    if (p.includes('spankbang'))                 return 'spankbang';
+    if (p.includes('redtube'))                   return 'redtube';
+    if (p.includes('eporner'))                   return 'eporner';
     if (p.includes('bilibili'))                  return 'bilibili';
     if (p.includes('rumble'))                    return 'rumble';
     if (p.includes('jav') || p.includes('guru')) return 'jav';
@@ -354,6 +364,7 @@ async function downloadVideo() {
     downloadBtn.disabled = true;
     downloadProgress.style.display = 'block';
     progressBarFill.style.width = '0%';
+    setProgressPhase('processing');
 
     if (currentVideoInfo) {
         saveToHistory({
@@ -367,13 +378,14 @@ async function downloadVideo() {
         });
     }
 
-    // Fake progress (0→85%) while the server processes / runs yt-dlp.
-    // Replaced by real progress once the file transfer begins.
+    downloadAbortController = new AbortController();
     const fakeInterval = simulateProgress();
 
     try {
         const params = new URLSearchParams({ url: currentVideoUrl, format: selectedFormat });
-        const response = await fetch(`/api/download?${params}`);
+        const response = await fetch(`/api/download?${params}`, {
+            signal: downloadAbortController.signal
+        });
 
         clearInterval(fakeInterval);
 
@@ -388,8 +400,8 @@ async function downloadVideo() {
         const fnMatch = cd.match(/filename[^;=\n]*=\s*(?:UTF-8'')?["']?([^"';\r\n]+)/i);
         const filename = fnMatch ? decodeURIComponent(fnMatch[1].trim().replace(/["']$/, '')) : 'video.mp4';
 
-        // Stream response so we can show real download progress (85→99%)
-        // and create a blob URL without a second network request.
+        // Switch UI to transfer phase and stream chunks with real progress (85→99%)
+        setProgressPhase('transferring');
         const total = parseInt(response.headers.get('content-length') || '0', 10);
         const reader = response.body.getReader();
         const chunks = [];
@@ -426,9 +438,34 @@ async function downloadVideo() {
     } catch (err) {
         clearInterval(fakeInterval);
         downloadProgress.style.display = 'none';
-        showError(err.message);
+        if (err.name !== 'AbortError') showError(err.message);
     } finally {
         downloadBtn.disabled = false;
+        downloadAbortController = null;
+    }
+}
+
+// ── CANCEL DOWNLOAD ──────────────────────────────────────────────────────
+function cancelDownload() {
+    if (downloadAbortController) {
+        downloadAbortController.abort();
+        downloadAbortController = null;
+    }
+    downloadProgress.style.display = 'none';
+    progressBarFill.style.width = '0%';
+    downloadBtn.disabled = false;
+}
+
+// ── PROGRESS PHASE TEXT ──────────────────────────────────────────────────
+function setProgressPhase(phase) {
+    const h3 = document.querySelector('.progress-text h3');
+    const p  = document.querySelector('.progress-text p');
+    if (phase === 'processing') {
+        h3.textContent = 'Processing…';
+        p.textContent  = 'Fetching and encoding the video. This may take a minute.';
+    } else {
+        h3.textContent = 'Transferring…';
+        p.textContent  = 'Streaming video to your device.';
     }
 }
 

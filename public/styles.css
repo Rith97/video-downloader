@@ -38,6 +38,9 @@
     --missav-color: #10B981;
     --pornhub-color: #FF9000;
     --xvideos-color: #D00000;
+    --spankbang-color: #FF4600;
+    --redtube-color: #BC0101;
+    --eporner-color: #E8A000;
     --bilibili-color: #00AEEC;
     --rumble-color: #85C742;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -510,6 +513,45 @@ body {
     box-shadow: 0 0 20px rgba(208, 0, 0, 0.1);
 }
 
+.platform-chip[data-platform="spankbang"]:hover {
+    color: var(--spankbang-color);
+    border-color: rgba(255, 70, 0, 0.2);
+    background: rgba(255, 70, 0, 0.06);
+}
+
+.platform-chip.active[data-platform="spankbang"] {
+    color: var(--spankbang-color);
+    border-color: rgba(255, 70, 0, 0.3);
+    background: rgba(255, 70, 0, 0.1);
+    box-shadow: 0 0 20px rgba(255, 70, 0, 0.1);
+}
+
+.platform-chip[data-platform="redtube"]:hover {
+    color: var(--redtube-color);
+    border-color: rgba(188, 1, 1, 0.2);
+    background: rgba(188, 1, 1, 0.06);
+}
+
+.platform-chip.active[data-platform="redtube"] {
+    color: var(--redtube-color);
+    border-color: rgba(188, 1, 1, 0.3);
+    background: rgba(188, 1, 1, 0.1);
+    box-shadow: 0 0 20px rgba(188, 1, 1, 0.1);
+}
+
+.platform-chip[data-platform="eporner"]:hover {
+    color: var(--eporner-color);
+    border-color: rgba(232, 160, 0, 0.2);
+    background: rgba(232, 160, 0, 0.06);
+}
+
+.platform-chip.active[data-platform="eporner"] {
+    color: var(--eporner-color);
+    border-color: rgba(232, 160, 0, 0.3);
+    background: rgba(232, 160, 0, 0.1);
+    box-shadow: 0 0 20px rgba(232, 160, 0, 0.1);
+}
+
 .platform-chip[data-platform="bilibili"]:hover {
     color: var(--bilibili-color);
     border-color: rgba(0, 174, 236, 0.2);
@@ -854,6 +896,21 @@ body {
     color: white;
 }
 
+.video-platform-badge.spankbang {
+    background: rgba(255, 70, 0, 0.9);
+    color: white;
+}
+
+.video-platform-badge.redtube {
+    background: rgba(188, 1, 1, 0.9);
+    color: white;
+}
+
+.video-platform-badge.eporner {
+    background: rgba(232, 160, 0, 0.9);
+    color: #1a1a1a;
+}
+
 .video-platform-badge.pornhub {
     background: rgba(255, 144, 0, 0.9);
     color: #1a1a1a;
@@ -1042,6 +1099,30 @@ body {
 .progress-text p {
     font-size: 0.82rem;
     color: var(--text-secondary);
+}
+
+.cancel-download-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: var(--radius-full);
+    color: #FCA5A5;
+    font-size: 0.78rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    flex-shrink: 0;
+}
+
+.cancel-download-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #EF4444;
 }
 
 .progress-bar-track {
@@ -1234,6 +1315,9 @@ body {
 .history-badge.missav     { background: rgba(16,185,129,0.15);  color: var(--missav-color); }
 .history-badge.pornhub    { background: rgba(255,144,0,0.15);   color: var(--pornhub-color); }
 .history-badge.xvideos    { background: rgba(208,0,0,0.15);     color: var(--xvideos-color); }
+.history-badge.spankbang  { background: rgba(255,70,0,0.15);    color: var(--spankbang-color); }
+.history-badge.redtube    { background: rgba(188,1,1,0.15);     color: var(--redtube-color); }
+.history-badge.eporner    { background: rgba(232,160,0,0.15);   color: var(--eporner-color); }
 .history-badge.bilibili   { background: rgba(0,174,236,0.15);   color: var(--bilibili-color); }
 .history-badge.rumble     { background: rgba(133,199,66,0.15);  color: var(--rumble-color); }
 

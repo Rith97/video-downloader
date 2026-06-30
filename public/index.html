@@ -104,6 +104,18 @@
                     <span class="chip-letter">X</span>
                     XVideos
                 </div>
+                <div class="platform-chip" data-platform="spankbang">
+                    <span class="chip-letter">S</span>
+                    SpankBang
+                </div>
+                <div class="platform-chip" data-platform="redtube">
+                    <span class="chip-letter">R</span>
+                    RedTube
+                </div>
+                <div class="platform-chip" data-platform="eporner">
+                    <span class="chip-letter">E</span>
+                    Eporner
+                </div>
                 <div class="platform-chip" data-platform="bilibili">
                     <span class="chip-letter">B</span>
                     Bilibili
@@ -267,9 +279,15 @@
                     </svg>
                 </div>
                 <div class="progress-text">
-                    <h3>Downloading...</h3>
-                    <p>Your video is being prepared. This may take a moment.</p>
+                    <h3>Processing…</h3>
+                    <p>Fetching and encoding the video. This may take a minute.</p>
                 </div>
+                <button class="cancel-download-btn" id="cancelDownloadBtn" onclick="cancelDownload()" title="Cancel download">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                    Cancel
+                </button>
             </div>
             <div class="progress-bar-track">
                 <div class="progress-bar-fill" id="progressBarFill"></div>

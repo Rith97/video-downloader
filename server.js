@@ -65,6 +65,38 @@ function sendYtDlpUnavailable(res) {
     });
 }
 
+// Runs a yt-dlp command and rejects with a friendly error if it takes longer
+// than timeoutMs (default 10 min). Kills the child process on timeout.
+function runYtDlp(args, timeoutMs = 10 * 60 * 1000) {
+    return new Promise((resolve, reject) => {
+        const emitter = ytDlpWrap.exec(args);
+        let stderr = '';
+        let settled = false;
+
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { emitter.ytDlpProcess?.kill('SIGTERM'); } catch {}
+            reject(new Error('Download timed out (10-minute limit). Try a shorter clip or lower quality.'));
+        }, timeoutMs);
+
+        emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
+        emitter.on('error', err => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(err);
+        });
+        emitter.on('close', code => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (code === 0) resolve();
+            else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+        });
+    });
+}
+
 // Short-lived cache of extracted video data (avoids re-fetching the same
 // page between /api/info and the immediately-following /api/download).
 const extractCache = new Map();
@@ -597,16 +629,7 @@ app.get('/api/download', async (req, res) => {
                 '-f', 'bestvideo+bestaudio/best',
                 '--recode-video', 'mp4',
             ];
-            await new Promise((resolve, reject) => {
-                const emitter = ytDlpWrap.exec(args);
-                let stderr = '';
-                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
-                emitter.on('error', reject);
-                emitter.on('close', code => {
-                    if (code === 0) resolve();
-                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
-                });
-            });
+            await runYtDlp(args);
             const files = fs.readdirSync(DOWNLOADS_DIR)
                 .filter(f => f.includes(`_${timestamp}`))
                 .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
@@ -643,16 +666,7 @@ app.get('/api/download', async (req, res) => {
                 '-f', 'bestvideo+bestaudio/best',
                 '--recode-video', 'mp4',
             ];
-            await new Promise((resolve, reject) => {
-                const emitter = ytDlpWrap.exec(args);
-                let stderr = '';
-                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
-                emitter.on('error', reject);
-                emitter.on('close', code => {
-                    if (code === 0) resolve();
-                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
-                });
-            });
+            await runYtDlp(args);
             const files = fs.readdirSync(DOWNLOADS_DIR)
                 .filter(f => f.includes(`_${timestamp}`))
                 .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
@@ -692,16 +706,7 @@ app.get('/api/download', async (req, res) => {
                 '--recode-video', 'mp4',
             ];
 
-            await new Promise((resolve, reject) => {
-                const emitter = ytDlpWrap.exec(args);
-                let stderr = '';
-                emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
-                emitter.on('error', reject);
-                emitter.on('close', code => {
-                    if (code === 0) resolve();
-                    else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
-                });
-            });
+            await runYtDlp(args);
 
             const files = fs.readdirSync(DOWNLOADS_DIR)
                 .filter(f => f.includes(`_${timestamp}`))
@@ -767,22 +772,7 @@ app.get('/api/download', async (req, res) => {
         // recode to a universally playable mp4.
         args.push('--recode-video', 'mp4');
 
-        // Execute download
-        await new Promise((resolve, reject) => {
-            const emitter = ytDlpWrap.exec(args);
-            let stderr = '';
-
-            emitter.ytDlpProcess?.stderr?.on('data', (data) => {
-                stderr += data.toString();
-            });
-
-            emitter.on('error', (err) => reject(err));
-
-            emitter.on('close', (code) => {
-                if (code === 0) resolve();
-                else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
-            });
-        });
+        await runYtDlp(args);
 
         // Find the downloaded file
         const files = fs.readdirSync(DOWNLOADS_DIR)
