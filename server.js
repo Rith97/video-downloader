@@ -568,7 +568,9 @@ app.get('/api/download', async (req, res) => {
                 '--add-header', `Referer:${data.referer}`,
                 '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 '--merge-output-format', 'mp4',
-                '-f', 'best',
+                '-S', 'vcodec:h264,acodec:aac,res,br',
+                '-f', 'bestvideo+bestaudio/best',
+                '--recode-video', 'mp4',
             ];
             await new Promise((resolve, reject) => {
                 const emitter = ytDlpWrap.exec(args);
@@ -613,7 +615,9 @@ app.get('/api/download', async (req, res) => {
                 '--add-header', `Referer:${data.referer}`,
                 '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 '--merge-output-format', 'mp4',
-                '-f', 'best',
+                '-S', 'vcodec:h264,acodec:aac,res,br',
+                '-f', 'bestvideo+bestaudio/best',
+                '--recode-video', 'mp4',
             ];
             await new Promise((resolve, reject) => {
                 const emitter = ytDlpWrap.exec(args);
@@ -659,7 +663,9 @@ app.get('/api/download', async (req, res) => {
                 '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 '--merge-output-format', 'mp4',
                 '--extractor-args', 'generic:impersonate',
-                '-f', 'best',
+                '-S', 'vcodec:h264,acodec:aac,res,br',
+                '-f', 'bestvideo+bestaudio/best',
+                '--recode-video', 'mp4',
             ];
 
             await new Promise((resolve, reject) => {
@@ -718,12 +724,10 @@ app.get('/api/download', async (req, res) => {
             ...siteArgs(url)
         ];
 
-        // Format selector chain — in order of preference:
-        //  1. H.264 video + AAC audio (best phone compatibility, split streams)
-        //  2. H.264 video + any audio (Vimeo/Dailymotion use HLS audio with acodec=none)
-        //  3. Any best video + any audio
-        //  4. Best single combined stream in mp4
-        //  5. Best anything (ultimate fallback — never fails if yt-dlp can reach the video)
+        // Sort formats: prefer H.264 video + AAC audio for maximum device compatibility.
+        // -S is applied before -f so the best matching format wins.
+        args.push('-S', 'vcodec:h264,acodec:aac,res,br');
+
         if (format && format !== 'best') {
             args.push('-f', [
                 `${format}+bestaudio[acodec~='^(mp4a|aac)']`,
@@ -732,14 +736,12 @@ app.get('/api/download', async (req, res) => {
                 'best'
             ].join('/'));
         } else {
-            args.push('-f', [
-                "bestvideo[vcodec~='^(avc1|h264)']+bestaudio[acodec~='^(mp4a|aac)']",
-                "bestvideo[vcodec~='^(avc1|h264)']+bestaudio",
-                "bestvideo+bestaudio",
-                "best[ext=mp4]",
-                "best"
-            ].join('/'));
+            args.push('-f', 'bestvideo+bestaudio/best');
         }
+
+        // If the merged file still isn't H.264+AAC (e.g. VP9/AV1 fallback),
+        // recode to a universally playable mp4.
+        args.push('--recode-video', 'mp4');
 
         // Execute download
         await new Promise((resolve, reject) => {
