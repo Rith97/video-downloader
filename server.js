@@ -1,8 +1,8 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { exec, spawn } = require('child_process');
-const YTDlpWrap = require('yt-dlp-wrap').default;
+const https = require('https');
+const { spawn } = require('child_process');
 
 // On Linux use the system ffmpeg (apt-installed); ffmpeg-static crashes with SIGSEGV there.
 const ffmpegStatic = process.platform === 'linux'
@@ -11,6 +11,25 @@ const ffmpegStatic = process.platform === 'linux'
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+function loadEnvFile() {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+        const eq = trimmed.indexOf('=');
+        const key = trimmed.slice(0, eq).trim();
+        let value = trimmed.slice(eq + 1).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+        if (key && process.env[key] === undefined) process.env[key] = value;
+    }
+}
+
+loadEnvFile();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -22,41 +41,28 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 }
 
 // Resolve the yt-dlp executable in a way that prefers the newer Python-installed binary when available
-let ytDlpBinaryPath = 'yt-dlp';
-let ytDlpWrap = null;
+let ytDlpCommand = ['yt-dlp'];
 let ytDlpAvailable = true;
 let ytDlpErrorMessage = '';
 
-const venvYtDlp = process.platform === 'win32'
-    ? path.join(__dirname, '.venv', 'Scripts', 'yt-dlp.exe')
-    : path.join(__dirname, '.venv', 'bin', 'yt-dlp');
-const localBinary = path.join(__dirname, 'yt-dlp.exe');
-const candidateBinaries = [];
+if (process.platform === 'win32') {
+    const localBinary = path.join(__dirname, 'yt-dlp.exe');
+    const pythonCandidates = [
+        process.env.PYTHON,
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+    ].filter(Boolean);
+    const python = pythonCandidates.find(p => fs.existsSync(p));
 
-if (fs.existsSync(venvYtDlp)) {
-    candidateBinaries.push(venvYtDlp);
-}
-if (process.platform === 'win32' && fs.existsSync(localBinary)) {
-    candidateBinaries.push(localBinary);
-}
-candidateBinaries.push('yt-dlp');
-
-const resolvedBinary = candidateBinaries.find(candidate => {
-    if (candidate === 'yt-dlp') return true;
-    return fs.existsSync(candidate);
-});
-
-if (resolvedBinary) {
-    ytDlpBinaryPath = resolvedBinary;
-    try {
-        ytDlpWrap = new YTDlpWrap(ytDlpBinaryPath);
-    } catch (err) {
+    if (fs.existsSync(localBinary)) {
+        ytDlpCommand = [localBinary];
+    } else if (python) {
+        ytDlpCommand = [python, '-m', 'yt_dlp'];
+    } else {
         ytDlpAvailable = false;
-        ytDlpErrorMessage = `Unable to initialize yt-dlp: ${err.message}`;
+        ytDlpErrorMessage = 'yt-dlp was not found. Install yt-dlp for Python or place yt-dlp.exe in the app folder.';
     }
-} else {
-    ytDlpAvailable = false;
-    ytDlpErrorMessage = 'yt-dlp binary was not found. Install yt-dlp or place yt-dlp.exe in the app folder.';
 }
 
 function sendYtDlpUnavailable(res) {
@@ -65,29 +71,65 @@ function sendYtDlpUnavailable(res) {
     });
 }
 
-// Runs a yt-dlp command and rejects with a friendly error if it takes longer
-// than timeoutMs (default 10 min). Kills the child process on timeout.
-function runYtDlp(args, timeoutMs = 10 * 60 * 1000) {
+function spawnYtDlp(args) {
+    return spawn(ytDlpCommand[0], [...ytDlpCommand.slice(1), ...args]);
+}
+
+function execYtDlpPromise(args, timeoutMs = 2 * 60 * 1000) {
     return new Promise((resolve, reject) => {
-        const emitter = ytDlpWrap.exec(args);
+        const proc = spawnYtDlp(args);
+        let stdout = '';
         let stderr = '';
         let settled = false;
 
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
-            try { emitter.ytDlpProcess?.kill('SIGTERM'); } catch {}
-            reject(new Error('Download timed out (10-minute limit). Try a shorter clip or lower quality.'));
+            try { proc.kill('SIGTERM'); } catch {}
+            reject(new Error(`yt-dlp timed out after ${Math.round(timeoutMs / 1000)} seconds`));
         }, timeoutMs);
 
-        emitter.ytDlpProcess?.stderr?.on('data', d => { stderr += d.toString(); });
-        emitter.on('error', err => {
+        proc.stdout.on('data', d => { stdout += d.toString(); });
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('error', err => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
             reject(err);
         });
-        emitter.on('close', code => {
+        proc.on('close', code => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (code === 0) resolve(stdout);
+            else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+        });
+    });
+}
+
+// Runs a yt-dlp command and rejects with a friendly error if it takes longer
+// than timeoutMs (default 10 min). Kills the child process on timeout.
+function runYtDlp(args, timeoutMs = 10 * 60 * 1000) {
+    return new Promise((resolve, reject) => {
+        const proc = spawnYtDlp(args);
+        let stderr = '';
+        let settled = false;
+
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { proc.kill('SIGTERM'); } catch {}
+            reject(new Error('Download timed out (10-minute limit). Try a shorter clip or lower quality.'));
+        }, timeoutMs);
+
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('error', err => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(err);
+        });
+        proc.on('close', code => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
@@ -130,6 +172,9 @@ function siteArgs(url) {
             '--extractor-args', 'facebook:skip_embed=true'
         ];
     }
+    if (/tiktok\.com|vm\.tiktok\.com/i.test(url)) {
+        return ['--extractor-args', 'tiktok:api_hostname=api16-normal-c-useast1a.tiktokv.com'];
+    }
     return [];
 }
 
@@ -163,6 +208,12 @@ function friendlyError(raw) {
         return 'Video not found. Check the URL.';
     if (/timed out|socket|network/i.test(raw))
         return 'Connection timed out. The platform may be slow or unavailable.';
+    if (/unsupported url|no suitable extractor/i.test(raw))
+        return 'This site is not supported. Try a URL from a supported platform.';
+    if (/playlist|too many|download limit/i.test(raw))
+        return 'Playlist downloads are not supported. Please use a direct video URL.';
+    if (/geo.block|not available in your|region/i.test(raw))
+        return 'This video is geo-restricted and not available in this region.';
     return 'Download failed. The video may be private, restricted, or the URL is invalid.';
 }
 
@@ -277,18 +328,39 @@ function getChromiumPath() {
 }
 
 function getBrowserPython() {
-    const venv = path.join(__dirname, '.venv', 'Scripts', 'python.exe');
-    if (process.platform === 'win32' && fs.existsSync(venv)) return venv;
+    if (process.platform === 'win32') {
+        const candidates = [
+            process.env.PYTHON,
+            path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
+            path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+            path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+            path.join(__dirname, '.venv', 'Scripts', 'python.exe'),
+        ].filter(Boolean);
+        const python = candidates.find(p => fs.existsSync(p));
+        if (python) return python;
+    }
     return 'python3';
 }
 
-function runPythonScript(code, args = []) {
+function runPythonScript(code, args = [], timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const proc = spawn(getBrowserPython(), ['-c', code, ...args]);
-        let out = '', err = '';
+        let out = '', err = '', settled = false;
+
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { proc.kill('SIGTERM'); } catch {}
+            reject(new Error('Python extractor timed out. The site may be slow or unavailable.'));
+        }, timeoutMs);
+
         proc.stdout.on('data', d => { out += d.toString(); });
         proc.stderr.on('data', d => { err += d.toString(); });
+        proc.on('error', e => {
+            if (settled) return; settled = true; clearTimeout(timer); reject(e);
+        });
         proc.on('close', code => {
+            if (settled) return; settled = true; clearTimeout(timer);
             if (code !== 0) reject(new Error(err || 'Python subprocess failed'));
             else resolve(out.trim());
         });
@@ -538,7 +610,7 @@ app.post('/api/info', async (req, res) => {
         }
     }
 
-    if (!ytDlpAvailable || !ytDlpWrap) {
+    if (!ytDlpAvailable) {
         return sendYtDlpUnavailable(res);
     }
 
@@ -547,7 +619,7 @@ app.post('/api/info', async (req, res) => {
     }
 
     try {
-        const stdout = await ytDlpWrap.execPromise([
+        const stdout = await execYtDlpPromise([
             url,
             '--dump-json',
             '--no-warnings',
@@ -600,97 +672,80 @@ app.post('/api/info', async (req, res) => {
     }
 });
 
-// ── DOWNLOAD VIDEO ──────────────────────────────────────────────────────
-app.get('/api/download', async (req, res) => {
-    const { url, format } = req.query;
+function findDownloadedFile(timestamp) {
+    const files = fs.readdirSync(DOWNLOADS_DIR)
+        .filter(f => f.includes(`_${timestamp}`))
+        .map(f => ({
+            name: f,
+            path: path.join(DOWNLOADS_DIR, f),
+            time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs
+        }))
+        .sort((a, b) => b.time - a.time);
 
-    if (!url) {
-        return res.status(400).json({ error: 'URL is required' });
+    if (files.length === 0) {
+        throw new Error('Download completed but file not found');
     }
 
+    const file = files[0];
+    return {
+        filePath: file.path,
+        cleanName: file.name.replace(`_${timestamp}`, '')
+    };
+}
+
+async function downloadVideoToFile(url, options = {}) {
+    const format = options.format || 'best';
+    const fastDownload = options.fastDownload !== false;
     const timestamp = Date.now();
     const outputTemplate = path.join(DOWNLOADS_DIR, `%(title)s_${timestamp}.%(ext)s`);
 
-    // curl-based download for javgg.net
+    if (!ytDlpAvailable) {
+        throw new Error(ytDlpErrorMessage || 'yt-dlp is currently unavailable.');
+    }
+
     if (isCurlSite(url)) {
-        if (!ytDlpAvailable || !ytDlpWrap) return sendYtDlpUnavailable(res);
-        try {
-            const cached = getExtractCache(url);
-            const data = (cached?.type === 'javgg') ? cached : await getJavggVideoUrl(url);
-            const args = [
-                data.m3u8,
-                '--ffmpeg-location', ffmpegStatic,
-                '-o', outputTemplate,
-                '--no-warnings',
-                '--add-header', `Referer:${data.referer}`,
-                '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                '--merge-output-format', 'mp4',
-                '-S', 'vcodec:h264,acodec:aac,res,br',
-                '-f', 'bestvideo+bestaudio/best',
-                '--recode-video', 'mp4',
-            ];
-            await runYtDlp(args);
-            const files = fs.readdirSync(DOWNLOADS_DIR)
-                .filter(f => f.includes(`_${timestamp}`))
-                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
-                .sort((a, b) => b.time - a.time);
-            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
-            const file = files[0];
-            const cleanName = file.name.replace(`_${timestamp}`, '');
-            res.download(file.path, cleanName, () => {
-                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
-            });
-        } catch (err) {
-            console.error('javgg.net download error:', err.message);
-            res.status(500).json({ error: err.message || 'javgg.net download failed.' });
-        }
-        return;
+        const cached = getExtractCache(url);
+        const data = (cached?.type === 'javgg') ? cached : await getJavggVideoUrl(url);
+        const args = [
+            data.m3u8,
+            '--ffmpeg-location', ffmpegStatic,
+            '-o', outputTemplate,
+            '--no-warnings',
+            '--add-header', `Referer:${data.referer}`,
+            '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            '--merge-output-format', 'mp4',
+            '-S', 'vcodec:h264,acodec:aac,res,br',
+            '-f', 'bestvideo+bestaudio/best',
+            '--recode-video', 'mp4',
+        ];
+        await runYtDlp(args);
+        return findDownloadedFile(timestamp);
     }
 
-    // curl-based download for MissAV pages
     if (isMissavSite(url)) {
-        if (!ytDlpAvailable || !ytDlpWrap) return sendYtDlpUnavailable(res);
-
-        try {
-            const cached = getExtractCache(url);
-            const data = (cached?.type === 'missav') ? cached : await getMissavVideoUrl(url);
-            const args = [
-                data.videoUrl,
-                '--ffmpeg-location', ffmpegStatic,
-                '-o', outputTemplate,
-                '--no-warnings',
-                '--add-header', `Referer:${data.referer}`,
-                '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                '--merge-output-format', 'mp4',
-                '-S', 'vcodec:h264,acodec:aac,res,br',
-                '-f', 'bestvideo+bestaudio/best',
-                '--recode-video', 'mp4',
-            ];
-            await runYtDlp(args);
-            const files = fs.readdirSync(DOWNLOADS_DIR)
-                .filter(f => f.includes(`_${timestamp}`))
-                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
-                .sort((a, b) => b.time - a.time);
-            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
-            const file = files[0];
-            const cleanName = file.name.replace(`_${timestamp}`, '');
-            res.download(file.path, cleanName, () => {
-                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
-            });
-        } catch (err) {
-            console.error('MissAV download error:', err.message);
-            res.status(500).json({ error: err.message || 'MissAV download failed.' });
-        }
-        return;
+        const cached = getExtractCache(url);
+        const data = (cached?.type === 'missav') ? cached : await getMissavVideoUrl(url);
+        const args = [
+            data.videoUrl,
+            '--ffmpeg-location', ffmpegStatic,
+            '-o', outputTemplate,
+            '--no-warnings',
+            '--add-header', `Referer:${data.referer}`,
+            '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            '--merge-output-format', 'mp4',
+            '-S', 'vcodec:h264,acodec:aac,res,br',
+            '-f', 'bestvideo+bestaudio/best',
+            '--recode-video', 'mp4',
+        ];
+        await runYtDlp(args);
+        return findDownloadedFile(timestamp);
     }
 
-    // Browser-based download for JAV sites
     if (isBrowserSite(url)) {
         let cookiePath = null;
         try {
             const { videoUrl, referer, cookiePath: cp } = await browserGetVideoUrl(url);
             cookiePath = cp;
-
             const args = [
                 videoUrl,
                 '--ffmpeg-location', ffmpegStatic,
@@ -705,58 +760,45 @@ app.get('/api/download', async (req, res) => {
                 '-f', 'bestvideo+bestaudio/best',
                 '--recode-video', 'mp4',
             ];
-
             await runYtDlp(args);
-
-            const files = fs.readdirSync(DOWNLOADS_DIR)
-                .filter(f => f.includes(`_${timestamp}`))
-                .map(f => ({ name: f, path: path.join(DOWNLOADS_DIR, f), time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
-                .sort((a, b) => b.time - a.time);
-
-            if (files.length === 0) return res.status(500).json({ error: 'Download completed but file not found' });
-
-            const file = files[0];
-            const cleanName = file.name.replace(`_${timestamp}`, '');
-            res.download(file.path, cleanName, () => {
-                try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
-            });
-        } catch (err) {
-            console.error('Browser download error:', err.message);
-            let msg = err.message || 'Browser extraction failed.';
-            if (/403|UserProjectAccountProblem|unable to download/i.test(msg)) {
-                msg = 'This video\'s CDN is currently unavailable (server-side billing issue). Please try again later or check if the site has restored their video hosting.';
-            } else if (/521|522|502|Bad Gateway/i.test(msg)) {
-                msg = 'The video CDN is down. Please try again later.';
-            }
-            res.status(500).json({ error: msg });
+            return findDownloadedFile(timestamp);
         } finally {
             if (cookiePath) try { fs.unlinkSync(cookiePath); } catch {}
         }
-        return;
     }
 
-    if (!ytDlpAvailable || !ytDlpWrap) {
-        return sendYtDlpUnavailable(res);
-    }
+    const args = [
+        url,
+        '--ffmpeg-location', ffmpegStatic,
+        '-o', outputTemplate,
+        '--no-playlist',
+        '--no-warnings',
+        '--socket-timeout', '30',
+        '--retries', '3',
+        '--fragment-retries', '5',
+        '--concurrent-fragments', '6',
+        '--merge-output-format', 'mp4',
+        ...siteArgs(url)
+    ];
 
-    try {
-        // Build yt-dlp arguments
-        const args = [
-            url,
-            '--ffmpeg-location', ffmpegStatic,
-            '-o', outputTemplate,
-            '--no-playlist',
-            '--no-warnings',
-            '--socket-timeout', '30',
-            '--retries', '3',
-            '--merge-output-format', 'mp4',
-            ...siteArgs(url)
-        ];
-
-        // Sort formats: prefer H.264 video + AAC audio for maximum device compatibility.
-        // -S is applied before -f so the best matching format wins.
+    if (fastDownload) {
         args.push('-S', 'vcodec:h264,acodec:aac,res,br');
-
+        if (format && format !== 'best') {
+            args.push('-f', [
+                format,
+                'best[ext=mp4][vcodec^=avc1][acodec^=mp4a]',
+                'best[ext=mp4]',
+                'best'
+            ].join('/'));
+        } else {
+            args.push('-f', [
+                'best[ext=mp4][vcodec^=avc1][acodec^=mp4a]',
+                'best[ext=mp4]',
+                'best'
+            ].join('/'));
+        }
+    } else {
+        args.push('-S', 'vcodec:h264,acodec:aac,res,br');
         if (format && format !== 'best') {
             args.push('-f', [
                 `${format}+bestaudio[acodec~='^(mp4a|aac)']`,
@@ -767,36 +809,32 @@ app.get('/api/download', async (req, res) => {
         } else {
             args.push('-f', 'bestvideo+bestaudio/best');
         }
-
-        // If the merged file still isn't H.264+AAC (e.g. VP9/AV1 fallback),
-        // recode to a universally playable mp4.
         args.push('--recode-video', 'mp4');
+    }
 
-        await runYtDlp(args);
+    await runYtDlp(args);
+    return findDownloadedFile(timestamp);
+}
 
-        // Find the downloaded file
-        const files = fs.readdirSync(DOWNLOADS_DIR)
-            .filter(f => f.includes(`_${timestamp}`))
-            .map(f => ({
-                name: f,
-                path: path.join(DOWNLOADS_DIR, f),
-                time: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs
-            }))
-            .sort((a, b) => b.time - a.time);
+// ── DOWNLOAD VIDEO ──────────────────────────────────────────────────────
+app.get('/api/download', async (req, res) => {
+    const { url, format } = req.query;
+    const fastDownload = req.query.fast === '1';
 
-        if (files.length === 0) {
-            return res.status(500).json({ error: 'Download completed but file not found' });
-        }
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
 
-        const file = files[0];
-        const cleanName = file.name.replace(`_${timestamp}`, '');
+    if (!ytDlpAvailable) {
+        return sendYtDlpUnavailable(res);
+    }
 
-        // Stream file to client then cleanup
-        res.download(file.path, cleanName, (err) => {
-            // Cleanup: delete the file after sending
+    try {
+        const file = await downloadVideoToFile(url, { format, fastDownload });
+        res.download(file.filePath, file.cleanName, () => {
             try {
-                if (fs.existsSync(file.path)) {
-                    fs.unlinkSync(file.path);
+                if (fs.existsSync(file.filePath)) {
+                    fs.unlinkSync(file.filePath);
                 }
             } catch (e) {
                 console.error('Cleanup error:', e.message);
@@ -808,17 +846,222 @@ app.get('/api/download', async (req, res) => {
     }
 });
 
+// ── TELEGRAM BOT DOWNLOADS ──────────────────────────────────────────────
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_ALLOWED_CHAT_IDS = new Set(
+    (process.env.TELEGRAM_ALLOWED_CHAT_IDS || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean)
+);
+const TELEGRAM_MAX_UPLOAD_MB = Number(process.env.TELEGRAM_MAX_UPLOAD_MB || 49);
+const telegramState = {
+    enabled: Boolean(TELEGRAM_BOT_TOKEN),
+    username: '',
+    link: '',
+    offset: 0,
+    activeChats: new Set()
+};
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function extractFirstUrl(text = '') {
+    const match = text.match(/https?:\/\/[^\s<>"']+/i);
+    return match ? match[0] : '';
+}
+
+function isTelegramChatAllowed(chatId) {
+    return TELEGRAM_ALLOWED_CHAT_IDS.size === 0 || TELEGRAM_ALLOWED_CHAT_IDS.has(String(chatId));
+}
+
+async function telegramJson(method, payload = {}) {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+        throw new Error(data.description || `Telegram ${method} failed`);
+    }
+    return data.result;
+}
+
+async function telegramSendMessage(chatId, text) {
+    return telegramJson('sendMessage', {
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true
+    });
+}
+
+function telegramMultipart(method, fields, fileField, filePath, filename) {
+    return new Promise((resolve, reject) => {
+        const boundary = `----VideoGrab${Date.now().toString(16)}`;
+        const chunks = [];
+
+        for (const [name, value] of Object.entries(fields)) {
+            chunks.push(Buffer.from(
+                `--${boundary}\r\n` +
+                `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+                `${value}\r\n`
+            ));
+        }
+
+        const safeName = filename.replace(/["\r\n]/g, '_');
+        chunks.push(Buffer.from(
+            `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="${fileField}"; filename="${safeName}"\r\n` +
+            `Content-Type: application/octet-stream\r\n\r\n`
+        ));
+        const closing = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const fileSize = fs.statSync(filePath).size;
+        const contentLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0) + fileSize + closing.length;
+
+        const req = https.request({
+            method: 'POST',
+            hostname: 'api.telegram.org',
+            path: `/bot${TELEGRAM_BOT_TOKEN}/${method}`,
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': contentLength
+            }
+        }, res => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', d => { body += d; });
+            res.on('end', () => {
+                let parsed = {};
+                try { parsed = JSON.parse(body); } catch {}
+                if (res.statusCode >= 200 && res.statusCode < 300 && parsed.ok !== false) {
+                    resolve(parsed.result);
+                } else {
+                    reject(new Error(parsed.description || `Telegram upload failed with status ${res.statusCode}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        for (const chunk of chunks) req.write(chunk);
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', reject);
+        stream.on('end', () => req.end(closing));
+        stream.pipe(req, { end: false });
+    });
+}
+
+async function telegramSendDocument(chatId, filePath, filename, caption) {
+    const sizeMb = fs.statSync(filePath).size / 1024 / 1024;
+    if (sizeMb > TELEGRAM_MAX_UPLOAD_MB) {
+        throw new Error(`File is ${sizeMb.toFixed(1)} MB. Telegram bot upload limit is ${TELEGRAM_MAX_UPLOAD_MB} MB.`);
+    }
+
+    return telegramMultipart('sendDocument', {
+        chat_id: chatId,
+        caption: caption.slice(0, 1024)
+    }, 'document', filePath, filename);
+}
+
+async function handleTelegramMessage(message) {
+    const chatId = message.chat?.id;
+    const text = message.text || message.caption || '';
+    if (!chatId) return;
+
+    if (!isTelegramChatAllowed(chatId)) {
+        await telegramSendMessage(chatId, 'This bot is not enabled for this chat.');
+        return;
+    }
+
+    if (/^\/start\b|^\/help\b/i.test(text)) {
+        await telegramSendMessage(chatId, 'Paste a video link here. I will download it and send the file back to this chat.');
+        return;
+    }
+
+    const url = extractFirstUrl(text);
+    if (!url) {
+        await telegramSendMessage(chatId, 'Paste a valid video URL.');
+        return;
+    }
+
+    if (telegramState.activeChats.has(chatId)) {
+        await telegramSendMessage(chatId, 'A download is already running for this chat. Please wait.');
+        return;
+    }
+
+    telegramState.activeChats.add(chatId);
+    let filePath = '';
+    try {
+        await telegramSendMessage(chatId, 'Downloading...');
+        const file = await downloadVideoToFile(url, { format: 'best', fastDownload: true });
+        filePath = file.filePath;
+        await telegramSendMessage(chatId, 'Uploading to Telegram...');
+        await telegramSendDocument(chatId, file.filePath, file.cleanName, `Saved by VideoGrab\n${url}`);
+    } catch (err) {
+        console.error('Telegram bot error:', err.message);
+        await telegramSendMessage(chatId, friendlyError(err.message || String(err)));
+    } finally {
+        telegramState.activeChats.delete(chatId);
+        if (filePath) try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
+    }
+}
+
+async function startTelegramBot() {
+    if (!TELEGRAM_BOT_TOKEN) return;
+
+    try {
+        const me = await telegramJson('getMe');
+        telegramState.username = me.username || '';
+        telegramState.link = telegramState.username ? `https://t.me/${telegramState.username}` : '';
+        console.log(`Telegram bot enabled${telegramState.username ? `: @${telegramState.username}` : ''}`);
+    } catch (err) {
+        console.error('Telegram bot startup error:', err.message);
+        return;
+    }
+
+    while (true) {
+        try {
+            const updates = await telegramJson('getUpdates', {
+                offset: telegramState.offset,
+                timeout: 25,
+                allowed_updates: ['message']
+            });
+            for (const update of updates) {
+                telegramState.offset = update.update_id + 1;
+                if (update.message) {
+                    handleTelegramMessage(update.message).catch(err => {
+                        console.error('Telegram message handler error:', err.message);
+                    });
+                }
+            }
+        } catch (err) {
+            console.error('Telegram polling error:', err.message);
+            await sleep(3000);
+        }
+    }
+}
+
+app.get('/api/telegram/status', (req, res) => {
+    res.json({
+        enabled: telegramState.enabled,
+        username: telegramState.username,
+        link: telegramState.link,
+        maxUploadMb: TELEGRAM_MAX_UPLOAD_MB
+    });
+});
+
 // ── HEALTH CHECK ────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
-    if (!ytDlpAvailable || !ytDlpWrap) {
+    if (!ytDlpAvailable) {
         return res.status(503).json({ status: 'error', message: ytDlpErrorMessage || 'yt-dlp is unavailable.' });
     }
 
     try {
-        const version = await ytDlpWrap.getVersion();
-        res.json({ status: 'ok', ytDlpVersion: version });
+        const version = (await execYtDlpPromise(['--version'], 30000)).trim();
+        res.json({ status: 'ok', ytDlpVersion: version, ytDlpCommand: ytDlpCommand.join(' ') });
     } catch (err) {
-        res.status(503).json({ status: 'error', message: 'yt-dlp is installed but could not be executed.' });
+        res.status(503).json({ status: 'error', message: 'yt-dlp is installed but could not be executed.', details: err.message });
     }
 });
 
@@ -832,6 +1075,9 @@ const server = app.listen(PORT, HOST, () => {
 ║     🎯  YouTube | Facebook | TikTok          ║
 ╚══════════════════════════════════════════════╝
     `);
+    startTelegramBot().catch(err => {
+        console.error('Telegram bot fatal error:', err.message);
+    });
 });
 
 server.on('error', (err) => {

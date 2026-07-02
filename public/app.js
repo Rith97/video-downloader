@@ -27,6 +27,9 @@ const inputWrapper = document.getElementById('inputWrapper');
 const historySection = document.getElementById('historySection');
 const historyList = document.getElementById('historyList');
 const historyClearBtn = document.getElementById('historyClearBtn');
+const telegramBotCard = document.getElementById('telegramBotCard');
+const telegramBotText = document.getElementById('telegramBotText');
+const telegramBotLink = document.getElementById('telegramBotLink');
 
 const HISTORY_KEY = 'videograb_history';
 const MAX_HISTORY = 20;
@@ -41,6 +44,7 @@ let downloadAbortController = null;
 document.addEventListener('DOMContentLoaded', () => {
     createParticles();
     checkServerHealth();
+    checkTelegramBot();
     setupEventListeners();
     renderHistory();
 });
@@ -88,6 +92,25 @@ async function checkServerHealth() {
     } catch {
         statusText.textContent = 'Server offline';
         badgeDot.classList.add('error');
+    }
+}
+
+async function checkTelegramBot() {
+    if (!telegramBotCard || !telegramBotLink) return;
+
+    try {
+        const res = await fetch('/api/telegram/status');
+        const data = await res.json();
+        if (!res.ok || !data.enabled || !data.link) {
+            telegramBotCard.style.display = 'none';
+            return;
+        }
+
+        telegramBotLink.href = data.link;
+        telegramBotText.textContent = `Paste a link to @${data.username} and it will send the file back.`;
+        telegramBotCard.style.display = 'flex';
+    } catch {
+        telegramBotCard.style.display = 'none';
     }
 }
 
@@ -159,6 +182,12 @@ function setupEventListeners() {
         twitch:      'https://www.twitch.tv',
         dailymotion: 'https://www.dailymotion.com',
         linkedin:    'https://www.linkedin.com',
+        streamable:  'https://streamable.com',
+        redgifs:     'https://www.redgifs.com',
+        vk:          'https://vk.com',
+        coub:        'https://coub.com',
+        loom:        'https://www.loom.com',
+        soundcloud:  'https://soundcloud.com',
     };
 
     document.querySelectorAll('.platform-chip[data-platform]').forEach(chip => {
@@ -217,6 +246,12 @@ function detectPlatform(url) {
         twitch:      { patterns: [/twitch\.tv/, /clips\.twitch\.tv/],                   icon: '🎮', name: 'Twitch',     color: 'twitch' },
         dailymotion: { patterns: [/dailymotion\.com/, /dai\.ly/],                       icon: '▶️', name: 'Dailymotion',color: 'dailymotion' },
         linkedin:    { patterns: [/linkedin\.com/],                                      icon: '💼', name: 'LinkedIn',   color: 'linkedin' },
+        streamable:  { patterns: [/streamable\.com/],                                    icon: 'S',  name: 'Streamable', color: 'streamable' },
+        redgifs:     { patterns: [/redgifs\.com/, /gfycat\.com/],                        icon: 'R',  name: 'Redgifs',    color: 'redgifs' },
+        vk:          { patterns: [/vk\.com/, /vkontakte\.ru/],                           icon: 'V',  name: 'VK',         color: 'vk' },
+        coub:        { patterns: [/coub\.com/],                                          icon: 'C',  name: 'Coub',       color: 'coub' },
+        loom:        { patterns: [/loom\.com/],                                          icon: 'L',  name: 'Loom',       color: 'loom' },
+        soundcloud:  { patterns: [/soundcloud\.com/, /snd\.sc/],                        icon: '🔊', name: 'SoundCloud', color: 'soundcloud' },
     };
 
     document.querySelectorAll('.platform-chip').forEach(chip => chip.classList.remove('active'));
@@ -375,6 +410,12 @@ function platformToClass(p) {
     if (p.includes('odysee') || p.includes('lbry'))        return 'odysee';
     if (p.includes('kick'))                      return 'kick';
     if (p.includes('bitchute'))                  return 'bitchute';
+    if (p.includes('streamable'))               return 'streamable';
+    if (p.includes('redgifs') || p.includes('gfycat')) return 'redgifs';
+    if (p === 'vk' || p.includes('vkontakte')) return 'vk';
+    if (p.includes('coub'))                     return 'coub';
+    if (p.includes('loom'))                     return 'loom';
+    if (p.includes('soundcloud'))               return 'soundcloud';
     if (p.includes('jav') || p.includes('guru')) return 'jav';
     if (p.includes('missav'))                    return 'missav';
     return '';
@@ -385,6 +426,12 @@ async function downloadVideo() {
     if (!currentVideoUrl) return;
 
     const selectedFormat = qualitySelect.value;
+    const params = new URLSearchParams({
+        url: currentVideoUrl,
+        format: selectedFormat,
+        fast: prefersFastDownload() ? '1' : '0'
+    });
+    const downloadUrl = `/api/download?${params}`;
     downloadBtn.disabled = true;
     downloadProgress.style.display = 'block';
     progressBarFill.style.width = '0%';
@@ -402,12 +449,23 @@ async function downloadVideo() {
         });
     }
 
+    if (usesNativeDownload()) {
+        progressBarFill.style.width = '100%';
+        setProgressPhase('transferring');
+        window.location.href = downloadUrl;
+        setTimeout(() => {
+            downloadProgress.style.display = 'none';
+            progressBarFill.style.width = '0%';
+            downloadBtn.disabled = false;
+        }, 1200);
+        return;
+    }
+
     downloadAbortController = new AbortController();
     const fakeInterval = simulateProgress();
 
     try {
-        const params = new URLSearchParams({ url: currentVideoUrl, format: selectedFormat });
-        const response = await fetch(`/api/download?${params}`, {
+        const response = await fetch(downloadUrl, {
             signal: downloadAbortController.signal
         });
 
@@ -467,6 +525,15 @@ async function downloadVideo() {
         downloadBtn.disabled = false;
         downloadAbortController = null;
     }
+}
+
+function prefersFastDownload() {
+    const platform = (currentVideoInfo?.platform || '').toLowerCase();
+    return usesNativeDownload() || platform.includes('youtube') || platform.includes('facebook');
+}
+
+function usesNativeDownload() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
 // ── CANCEL DOWNLOAD ──────────────────────────────────────────────────────
