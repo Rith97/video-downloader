@@ -101,13 +101,13 @@ async function checkTelegramBot() {
     try {
         const res = await fetch('/api/telegram/status');
         const data = await res.json();
-        if (!res.ok || !data.enabled || !data.link) {
+        if (!res.ok || !data.running || !data.link) {
             telegramBotCard.style.display = 'none';
             return;
         }
 
         telegramBotLink.href = data.link;
-        telegramBotText.textContent = `Paste a link to @${data.username} and it will send the file back.`;
+        telegramBotText.textContent = `Send a video URL to @${data.username} and it will send the file back (max ${data.maxUploadMb} MB).`;
         telegramBotCard.style.display = 'flex';
     } catch {
         telegramBotCard.style.display = 'none';

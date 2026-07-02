@@ -876,15 +876,19 @@ function isTelegramChatAllowed(chatId) {
     return TELEGRAM_ALLOWED_CHAT_IDS.size === 0 || TELEGRAM_ALLOWED_CHAT_IDS.has(String(chatId));
 }
 
-async function telegramJson(method, payload = {}) {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
+async function telegramJson(method, payload = {}, signal = null) {
+    const opts = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    });
+    };
+    if (signal) opts.signal = signal;
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, opts);
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) {
-        throw new Error(data.description || `Telegram ${method} failed`);
+        const err = new Error(data.description || `Telegram ${method} failed`);
+        err.errorCode = data.error_code;
+        throw err;
     }
     return data.result;
 }
@@ -970,37 +974,45 @@ async function handleTelegramMessage(message) {
     if (!chatId) return;
 
     if (!isTelegramChatAllowed(chatId)) {
-        await telegramSendMessage(chatId, 'This bot is not enabled for this chat.');
+        await telegramSendMessage(chatId, '⛔ This bot is private. Access not allowed.');
         return;
     }
 
     if (/^\/start\b|^\/help\b/i.test(text)) {
-        await telegramSendMessage(chatId, 'Paste a video link here. I will download it and send the file back to this chat.');
+        await telegramSendMessage(chatId,
+            '🎬 *VideoGrab Bot*\n\nPaste any video URL and I\'ll download it and send the file here.\n\nSupported: YouTube, TikTok, Instagram, Facebook, Twitter, Reddit, and many more.'
+        );
         return;
     }
 
     const url = extractFirstUrl(text);
     if (!url) {
-        await telegramSendMessage(chatId, 'Paste a valid video URL.');
+        await telegramSendMessage(chatId, '📎 Send me a video URL to download.');
         return;
     }
 
     if (telegramState.activeChats.has(chatId)) {
-        await telegramSendMessage(chatId, 'A download is already running for this chat. Please wait.');
+        await telegramSendMessage(chatId, '⏳ A download is already in progress. Please wait.');
         return;
     }
 
     telegramState.activeChats.add(chatId);
     let filePath = '';
     try {
-        await telegramSendMessage(chatId, 'Downloading...');
+        await telegramSendMessage(chatId, '⬇️ Downloading…');
         const file = await downloadVideoToFile(url, { format: 'best', fastDownload: true });
         filePath = file.filePath;
-        await telegramSendMessage(chatId, 'Uploading to Telegram...');
-        await telegramSendDocument(chatId, file.filePath, file.cleanName, `Saved by VideoGrab\n${url}`);
+        const sizeMb = (fs.statSync(filePath).size / 1024 / 1024).toFixed(1);
+        await telegramSendMessage(chatId, `📤 Uploading (${sizeMb} MB)…`);
+        await telegramSendDocument(chatId, file.filePath, file.cleanName, `🎬 ${file.cleanName}\n${url}`);
     } catch (err) {
-        console.error('Telegram bot error:', err.message);
-        await telegramSendMessage(chatId, friendlyError(err.message || String(err)));
+        console.error('Telegram bot download error:', err.message);
+        const msg = err.message || '';
+        if (msg.includes('MB. Telegram bot upload limit')) {
+            await telegramSendMessage(chatId, `❌ ${msg}`).catch(() => {});
+        } else {
+            await telegramSendMessage(chatId, `❌ ${friendlyError(msg)}`).catch(() => {});
+        }
     } finally {
         telegramState.activeChats.delete(chatId);
         if (filePath) try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
@@ -1008,25 +1020,48 @@ async function handleTelegramMessage(message) {
 }
 
 async function startTelegramBot() {
-    if (!TELEGRAM_BOT_TOKEN) return;
-
-    try {
-        const me = await telegramJson('getMe');
-        telegramState.username = me.username || '';
-        telegramState.link = telegramState.username ? `https://t.me/${telegramState.username}` : '';
-        console.log(`Telegram bot enabled${telegramState.username ? `: @${telegramState.username}` : ''}`);
-    } catch (err) {
-        console.error('Telegram bot startup error:', err.message);
+    if (!TELEGRAM_BOT_TOKEN) {
+        console.log('Telegram bot disabled: TELEGRAM_BOT_TOKEN not set.');
         return;
     }
 
+    // Retry getMe up to 5 times before giving up
+    let me = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+            me = await telegramJson('getMe');
+            break;
+        } catch (err) {
+            console.error(`Telegram bot startup attempt ${attempt}/5 failed: ${err.message}`);
+            if (attempt === 5) {
+                console.error('Telegram bot: giving up after 5 failed startup attempts.');
+                return;
+            }
+            await sleep(attempt * 3000);
+        }
+    }
+
+    telegramState.username = me.username || '';
+    telegramState.link = telegramState.username ? `https://t.me/${telegramState.username}` : '';
+    console.log(`Telegram bot started: @${telegramState.username || '(no username)'}`);
+
     while (true) {
         try {
-            const updates = await telegramJson('getUpdates', {
-                offset: telegramState.offset,
-                timeout: 25,
-                allowed_updates: ['message']
-            });
+            // Use AbortController so the fetch doesn't hang forever if the
+            // connection drops mid-long-poll (35s > 25s Telegram timeout).
+            const ac = new AbortController();
+            const pollTimer = setTimeout(() => ac.abort(), 35000);
+            let updates;
+            try {
+                updates = await telegramJson('getUpdates', {
+                    offset: telegramState.offset,
+                    timeout: 25,
+                    allowed_updates: ['message']
+                }, ac.signal);
+            } finally {
+                clearTimeout(pollTimer);
+            }
+
             for (const update of updates) {
                 telegramState.offset = update.update_id + 1;
                 if (update.message) {
@@ -1036,8 +1071,18 @@ async function startTelegramBot() {
                 }
             }
         } catch (err) {
-            console.error('Telegram polling error:', err.message);
-            await sleep(3000);
+            if (err.name === 'AbortError') {
+                // Poll timed out locally — normal, just retry immediately
+                continue;
+            }
+            // 409 Conflict means another instance is polling — back off longer
+            if (err.errorCode === 409 || (err.message || '').toLowerCase().includes('conflict')) {
+                console.error('Telegram: 409 conflict — another instance is polling. Backing off 30s…');
+                await sleep(30000);
+            } else {
+                console.error('Telegram polling error:', err.message);
+                await sleep(3000);
+            }
         }
     }
 }
@@ -1045,6 +1090,7 @@ async function startTelegramBot() {
 app.get('/api/telegram/status', (req, res) => {
     res.json({
         enabled: telegramState.enabled,
+        running: Boolean(telegramState.username),
         username: telegramState.username,
         link: telegramState.link,
         maxUploadMb: TELEGRAM_MAX_UPLOAD_MB
