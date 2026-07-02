@@ -710,6 +710,7 @@ async function downloadVideoToFile(url, options = {}) {
             data.m3u8,
             '--ffmpeg-location', ffmpegStatic,
             '-o', outputTemplate,
+            '--trim-filenames', '50',
             '--no-warnings',
             '--add-header', `Referer:${data.referer}`,
             '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -729,6 +730,7 @@ async function downloadVideoToFile(url, options = {}) {
             data.videoUrl,
             '--ffmpeg-location', ffmpegStatic,
             '-o', outputTemplate,
+            '--trim-filenames', '50',
             '--no-warnings',
             '--add-header', `Referer:${data.referer}`,
             '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -750,6 +752,7 @@ async function downloadVideoToFile(url, options = {}) {
                 videoUrl,
                 '--ffmpeg-location', ffmpegStatic,
                 '-o', outputTemplate,
+                '--trim-filenames', '50',
                 '--no-warnings',
                 '--cookies', cookiePath,
                 '--add-header', `Referer:${referer}`,
@@ -771,6 +774,7 @@ async function downloadVideoToFile(url, options = {}) {
         url,
         '--ffmpeg-location', ffmpegStatic,
         '-o', outputTemplate,
+        '--trim-filenames', '50',
         '--no-playlist',
         '--no-warnings',
         '--socket-timeout', '30',
@@ -860,7 +864,8 @@ const telegramState = {
     username: '',
     link: '',
     offset: 0,
-    activeChats: new Set()
+    activeChats: new Set(),
+    running: false
 };
 
 function sleep(ms) {
@@ -974,7 +979,7 @@ async function handleTelegramMessage(message) {
     if (!chatId) return;
 
     if (!isTelegramChatAllowed(chatId)) {
-        await telegramSendMessage(chatId, '⛔ This bot is private. Access not allowed.');
+        await telegramSendMessage(chatId, `⛔ Access denied. Your chat ID is: ${chatId}\nAsk the admin to add it to TELEGRAM_ALLOWED_CHAT_IDS.`);
         return;
     }
 
@@ -1043,9 +1048,11 @@ async function startTelegramBot() {
 
     telegramState.username = me.username || '';
     telegramState.link = telegramState.username ? `https://t.me/${telegramState.username}` : '';
+    telegramState.running = true;
     console.log(`Telegram bot started: @${telegramState.username || '(no username)'}`);
 
     while (true) {
+        telegramState.running = true;
         try {
             // Use AbortController so the fetch doesn't hang forever if the
             // connection drops mid-long-poll (35s > 25s Telegram timeout).
@@ -1075,6 +1082,9 @@ async function startTelegramBot() {
                 // Poll timed out locally — normal, just retry immediately
                 continue;
             }
+
+            telegramState.running = false;
+
             // 409 Conflict means another instance is polling — back off longer
             if (err.errorCode === 409 || (err.message || '').toLowerCase().includes('conflict')) {
                 console.error('Telegram: 409 conflict — another instance is polling. Backing off 30s…');
@@ -1090,7 +1100,7 @@ async function startTelegramBot() {
 app.get('/api/telegram/status', (req, res) => {
     res.json({
         enabled: telegramState.enabled,
-        running: Boolean(telegramState.username),
+        running: telegramState.running,
         username: telegramState.username,
         link: telegramState.link,
         maxUploadMb: TELEGRAM_MAX_UPLOAD_MB
