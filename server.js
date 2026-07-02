@@ -160,8 +160,34 @@ function getExtractCache(url) {
     return entry.data;
 }
 
+// YouTube blocks datacenter IPs (like Railway's) with "Sign in to confirm
+// you're not a bot" unless the request carries cookies from a real, logged-in
+// browser session. If YOUTUBE_COOKIES is set (Netscape cookies.txt content,
+// exported from a browser logged into youtube.com), write it to disk once and
+// pass it to yt-dlp for every YouTube request.
+let youtubeCookiesPath = null;
+let youtubeCookiesChecked = false;
+function getYoutubeCookiesPath() {
+    if (youtubeCookiesChecked) return youtubeCookiesPath;
+    youtubeCookiesChecked = true;
+    const raw = process.env.YOUTUBE_COOKIES;
+    if (!raw) return null;
+    try {
+        youtubeCookiesPath = path.join(DOWNLOADS_DIR, '_youtube_cookies.txt');
+        fs.writeFileSync(youtubeCookiesPath, raw);
+    } catch (err) {
+        console.error('Failed to write YouTube cookies file:', err.message);
+        youtubeCookiesPath = null;
+    }
+    return youtubeCookiesPath;
+}
+
 // Extra args per site
 function siteArgs(url) {
+    if (/youtube\.com|youtu\.be/i.test(url)) {
+        const cookiesPath = getYoutubeCookiesPath();
+        return cookiesPath ? ['--cookies', cookiesPath] : [];
+    }
     if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) {
         return [
             '--add-header', 'Referer:https://www.facebook.com/',
