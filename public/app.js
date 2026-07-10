@@ -33,6 +33,8 @@ const telegramBotLink = document.getElementById('telegramBotLink');
 
 const HISTORY_KEY = 'videograb_history';
 const MAX_HISTORY = 20;
+const YOUTUBE_COOKIES_REQUIRED_CODE = 'YOUTUBE_COOKIES_REQUIRED';
+const YOUTUBE_COOKIES_REQUIRED_MESSAGE = 'This deployment needs YOUTUBE_COOKIES to access YouTube. Set YOUTUBE_COOKIES from a logged-in YouTube cookies.txt export, then redeploy.';
 
 // ── STATE ────────────────────────────────────────────────────────────────
 let currentVideoUrl = '';
@@ -86,7 +88,7 @@ async function checkServerHealth() {
             statusText.textContent = `Ready • yt-dlp ${data.ytDlpVersion}`;
             badgeDot.classList.remove('error');
         } else {
-            statusText.textContent = data.message || 'yt-dlp not found';
+            statusText.textContent = getApiErrorMessage(data, 'yt-dlp not found');
             badgeDot.classList.add('error');
         }
     } catch {
@@ -107,7 +109,7 @@ async function checkTelegramBot() {
         }
 
         telegramBotLink.href = data.link;
-        telegramBotText.textContent = `Send a video URL to @${data.username} and it will send the file back (max ${data.maxUploadMb} MB).`;
+        telegramBotText.textContent = `Open @${data.username}, press Start, then paste a video link there (max ${data.maxUploadMb} MB).`;
         telegramBotCard.style.display = 'flex';
     } catch {
         telegramBotCard.style.display = 'none';
@@ -299,7 +301,7 @@ async function fetchVideoInfo() {
         const contentType = res.headers.get('content-type') || '';
         const data = contentType.includes('application/json') ? await res.json() : { error: await res.text() };
 
-        if (!res.ok) throw new Error(data.error || 'Failed to fetch video info');
+        if (!res.ok) throw new Error(getApiErrorMessage(data, 'Failed to fetch video info'));
 
         currentVideoUrl = url;
         currentVideoInfo = data;
@@ -474,7 +476,7 @@ async function downloadVideo() {
         const contentType = response.headers.get('content-type') || '';
         if (!response.ok || contentType.includes('application/json')) {
             const errData = await response.json().catch(() => ({ error: `Server error ${response.status}` }));
-            throw new Error(errData.error || 'Download failed');
+            throw new Error(getApiErrorMessage(errData, 'Download failed'));
         }
 
         // Parse filename from Content-Disposition
@@ -598,6 +600,13 @@ function formatFileSize(bytes) {
     if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(1) + ' MB';
     if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return bytes + ' B';
+}
+
+function getApiErrorMessage(data, fallback) {
+    if (data?.code === YOUTUBE_COOKIES_REQUIRED_CODE) {
+        return data.error || data.message || YOUTUBE_COOKIES_REQUIRED_MESSAGE;
+    }
+    return data?.error || data?.message || fallback;
 }
 
 function setLoading(loading) {

@@ -1,11 +1,17 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates ffmpeg \
+    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates ffmpeg wget \
     && apt-get install -y chromium \
-    && pip3 install --no-cache-dir --break-system-packages -U yt-dlp curl_cffi \
+    && pip3 install --no-cache-dir --break-system-packages -U curl_cffi \
     && apt-get purge -y python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp as the standalone release binary (not pip) so the server's
+# built-in self-updater (`yt-dlp -U`) can keep extractors current without
+# rebuilding the image.
+RUN wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
