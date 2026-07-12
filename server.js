@@ -2,6 +2,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
+const { Readable } = require('stream');
 const { spawn } = require('child_process');
 
 // On Linux use the system ffmpeg (apt-installed); ffmpeg-static crashes with SIGSEGV there.
@@ -148,6 +150,7 @@ function runYtDlp(args, timeoutMs = DOWNLOAD_TIMEOUT_MINUTES * 60 * 1000) {
 // page between /api/info and the immediately-following /api/download).
 const extractCache = new Map();
 const CACHE_TTL_MS = 4 * 60 * 1000; // 4 minutes
+const previewStreams = new Map();
 
 function setExtractCache(url, data) {
     extractCache.set(url, { data, ts: Date.now() });
@@ -163,6 +166,19 @@ function getExtractCache(url) {
         return null;
     }
     return entry.data;
+}
+
+// Stream URLs issued by video hosts are often short-lived and require a
+// Referer header. Keep them server-side and expose only a short-lived token,
+// so browsers can play them without cross-origin/CORS failures.
+function createPreviewStream(url, headers = {}) {
+    if (!url) return null;
+    const token = crypto.randomBytes(18).toString('base64url');
+    previewStreams.set(token, { url, headers, ts: Date.now() });
+    for (const [key, value] of previewStreams) {
+        if (Date.now() - value.ts > CACHE_TTL_MS) previewStreams.delete(key);
+    }
+    return token;
 }
 
 // YouTube blocks datacenter IPs (like Railway's) with "Sign in to confirm
@@ -207,6 +223,27 @@ const YOUTUBE_COOKIES_REQUIRED_MESSAGE = 'This deployment needs YOUTUBE_COOKIES 
 
 function isYoutubeUrl(url) {
     return /youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(url || '');
+}
+
+function getYoutubeEmbedUrl(value) {
+    try {
+        const url = new URL(value);
+        let id = '';
+        if (/youtu\.be$/i.test(url.hostname)) id = url.pathname.split('/').filter(Boolean)[0] || '';
+        else if (/youtube(?:-nocookie)?\.com$/i.test(url.hostname) || /youtube(?:-nocookie)?\.com$/i.test(url.hostname.replace(/^www\./, ''))) {
+            id = url.searchParams.get('v') || '';
+            if (!id) {
+                const parts = url.pathname.split('/').filter(Boolean);
+                const marker = parts.findIndex(part => /^(embed|shorts|live)$/i.test(part));
+                if (marker >= 0) id = parts[marker + 1] || '';
+            }
+        }
+        return /^[A-Za-z0-9_-]{6,}$/.test(id)
+            ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&autoplay=1`
+            : null;
+    } catch {
+        return null;
+    }
 }
 
 function isYoutubeCookiesRequiredError(raw) {
@@ -621,6 +658,7 @@ app.post('/api/info', async (req, res) => {
         try {
             const data = await getJavggVideoUrl(url);
             setExtractCache(url, { type: 'javgg', ...data });
+            const previewToken = createPreviewStream(data.m3u8, { Referer: data.referer });
             return res.json({
                 title: data.title || 'JAV Video',
                 thumbnail: data.thumbnail || null,
@@ -628,6 +666,8 @@ app.post('/api/info', async (req, res) => {
                 uploader: 'javgg.net',
                 platform: 'javgg.net',
                 viewCount: 0,
+                previewUrl: previewToken ? `/api/preview/${previewToken}` : null,
+                previewType: previewToken ? 'hls' : null,
                 formats: [
                     { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
                 ],
@@ -642,6 +682,7 @@ app.post('/api/info', async (req, res) => {
         try {
             const data = await getMissavVideoUrl(url);
             setExtractCache(url, { type: 'missav', ...data });
+            const previewToken = createPreviewStream(data.videoUrl, { Referer: data.referer });
             return res.json({
                 title: data.title || 'MissAV Video',
                 thumbnail: data.thumbnail || null,
@@ -649,6 +690,8 @@ app.post('/api/info', async (req, res) => {
                 uploader: 'missav',
                 platform: 'missav',
                 viewCount: 0,
+                previewUrl: previewToken ? `/api/preview/${previewToken}` : null,
+                previewType: previewToken ? (isM3u8Url(data.videoUrl) ? 'hls' : 'file') : null,
                 formats: [
                     { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
                 ]
@@ -738,6 +781,30 @@ app.post('/api/info', async (req, res) => {
             return true;
         });
 
+        // A combined audio/video URL can be played directly by most browsers.
+        // YouTube uses its official embed player because high-quality streams are
+        // normally split into separate audio and video tracks.
+        // Prefer progressive MP4 (native <video> support); fall back to an HLS
+        // playlist, which the frontend plays through hls.js via the relay.
+        const playableCandidates = (metadata.formats || [])
+            .filter(f => f.url && f.vcodec !== 'none' && f.acodec !== 'none')
+            .sort((a, b) => {
+                const aMp4 = !isM3u8Url(a.url) && a.ext === 'mp4' ? 1 : 0;
+                const bMp4 = !isM3u8Url(b.url) && b.ext === 'mp4' ? 1 : 0;
+                if (aMp4 !== bMp4) return bMp4 - aMp4;
+                return (b.height || 0) - (a.height || 0);
+            });
+        const playableFormat = playableCandidates[0];
+        const previewToken = !isYoutubeUrl(url)
+            ? createPreviewStream(playableFormat?.url, {
+                ...(playableFormat?.http_headers || {}),
+                Referer: playableFormat?.http_headers?.Referer || url
+            })
+            : null;
+        const previewType = previewToken
+            ? (isM3u8Url(playableFormat.url) ? 'hls' : 'file')
+            : null;
+
         res.json({
             title: metadata.title || 'Unknown Title',
             thumbnail: metadata.thumbnail || null,
@@ -745,6 +812,10 @@ app.post('/api/info', async (req, res) => {
             uploader: metadata.uploader || metadata.channel || 'Unknown',
             platform: metadata.extractor_key || metadata.extractor || 'Unknown',
             viewCount: metadata.view_count || 0,
+            embedUrl: isYoutubeUrl(url) ? getYoutubeEmbedUrl(url) : null,
+            streamUrl: !isYoutubeUrl(url) ? (playableFormat?.url || null) : null,
+            previewUrl: previewToken ? `/api/preview/${previewToken}` : null,
+            previewType,
             formats: uniqueFormats.length > 0 ? uniqueFormats : [
                 { formatId: 'best', ext: 'mp4', quality: 'Best Quality', resolution: 'best' }
             ]
@@ -752,6 +823,123 @@ app.post('/api/info', async (req, res) => {
     } catch (err) {
         console.error('Info fetch error:', err.message);
         res.status(500).json(apiErrorPayload(err.message, url));
+    }
+});
+
+// ── PREVIEW RELAY ───────────────────────────────────────────────────────
+// Relays previously extracted streams with the headers their hosts expect.
+// Range requests pass through so seeking works. HLS playlists (.m3u8) are
+// rewritten so every segment is also fetched through this relay — browsers
+// cannot fetch cross-origin segments directly.
+
+function isM3u8Url(u) {
+    return /\.m3u8($|\?)/i.test(u || '');
+}
+
+// Only relay to public http(s) hosts, never into the local network.
+function isSafeRelayTarget(u) {
+    try {
+        const parsed = new URL(u);
+        if (!/^https?:$/.test(parsed.protocol)) return false;
+        return !/^(localhost|127\.|0\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/i
+            .test(parsed.hostname);
+    } catch {
+        return false;
+    }
+}
+
+function previewRelayPath(token, absUrl) {
+    return `/api/preview/${token}/r?u=${encodeURIComponent(absUrl)}`;
+}
+
+// Rewrite every URI in an HLS playlist (segments, nested playlists, keys)
+// to go through the relay, resolving relative paths against the playlist URL.
+function rewriteM3u8(text, baseUrl, token) {
+    return text.split('\n').map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return line;
+        if (trimmed.startsWith('#')) {
+            return line.replace(/URI="([^"]+)"/g, (m, uri) => {
+                try { return `URI="${previewRelayPath(token, new URL(uri, baseUrl).href)}"`; }
+                catch { return m; }
+            });
+        }
+        try { return previewRelayPath(token, new URL(trimmed, baseUrl).href); }
+        catch { return line; }
+    }).join('\n');
+}
+
+async function relayPreview(req, res, targetUrl, stream, token) {
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ...stream.headers
+    };
+    const wantsPlaylist = isM3u8Url(targetUrl);
+    if (req.headers.range && !wantsPlaylist) headers.Range = req.headers.range;
+
+    const upstream = await fetch(targetUrl, { headers, redirect: 'follow' });
+    if (!upstream.ok && upstream.status !== 206) {
+        return res.status(upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502)
+            .json({ error: 'The video host rejected this preview stream.' });
+    }
+
+    const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+    const finalUrl = upstream.url || targetUrl;
+    if (/mpegurl/.test(contentType) || isM3u8Url(finalUrl)) {
+        const text = await upstream.text();
+        res.set('Content-Type', 'application/vnd.apple.mpegurl');
+        res.set('Cache-Control', 'no-store');
+        return res.send(rewriteM3u8(text, finalUrl, token));
+    }
+
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+    }
+    res.status(upstream.status);
+    if (!upstream.body) return res.end();
+    Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
+}
+
+function getPreviewStreamEntry(req, res) {
+    const stream = previewStreams.get(req.params.token);
+    if (!stream) {
+        res.status(410).json({ error: 'Preview link expired. Fetch the video again.' });
+        return null;
+    }
+    // Keep the token alive while the viewer is actively watching.
+    stream.ts = Date.now();
+    return stream;
+}
+
+app.get('/api/preview/:token', async (req, res) => {
+    const stream = getPreviewStreamEntry(req, res);
+    if (!stream) return;
+    try {
+        await relayPreview(req, res, stream.url, stream, req.params.token);
+    } catch (err) {
+        console.error('Preview stream error:', err.message);
+        if (!res.headersSent) res.status(502).json({ error: 'Could not open this video preview.' });
+        else res.destroy();
+    }
+});
+
+// HLS segments, nested playlists, and encryption keys referenced by a
+// rewritten playlist. The token must still be valid, and the target is
+// restricted to public http(s) hosts.
+app.get('/api/preview/:token/r', async (req, res) => {
+    const stream = getPreviewStreamEntry(req, res);
+    if (!stream) return;
+    const target = String(req.query.u || '');
+    if (!isSafeRelayTarget(target)) {
+        return res.status(400).json({ error: 'Invalid relay target.' });
+    }
+    try {
+        await relayPreview(req, res, target, stream, req.params.token);
+    } catch (err) {
+        console.error('Preview segment error:', err.message);
+        if (!res.headersSent) res.status(502).json({ error: 'Could not fetch video segment.' });
+        else res.destroy();
     }
 });
 
@@ -795,6 +983,14 @@ function findDownloadedFile(timestamp, startedAtMs) {
 
 function isSimpleFormatId(format) {
     return /^[A-Za-z0-9_.-]+$/.test(format || '');
+}
+
+function buildSelectedFormat(format) {
+    // A quality option may be video-only (as is common on YouTube). Pair it
+    // with the best available audio track, but retain the video-only option
+    // as a fallback for sites where audio is already included.
+    if (!format || format === 'best') return '';
+    return `${format}+bestaudio/${format}/bestvideo+bestaudio/best`;
 }
 
 // Errors where no retry with different args can possibly help.
@@ -922,8 +1118,11 @@ async function downloadVideoToFile(url, options = {}) {
     // for sites that block yt-dlp's TLS fingerprint.
     const firstAttempt = ['-S', 'vcodec:h264,acodec:aac,res,br'];
     if (fastDownload) {
-        if (format && format !== 'best' && !isSimpleFormatId(format)) {
-            firstAttempt.push('-f', format);
+        if (format && format !== 'best') {
+            // Previously simple ids such as YouTube's "137" were ignored in
+            // fast mode, so the quality selector often downloaded another
+            // resolution. Only accept a known id or yt-dlp selector syntax.
+            firstAttempt.push('-f', isSimpleFormatId(format) ? buildSelectedFormat(format) : format);
         } else {
             // In fast/mobile mode, prefer progressive MP4. Some platforms
             // return 403 for separate video-only format downloads.
@@ -1026,12 +1225,60 @@ const TELEGRAM_ADMIN_CHAT_IDS = new Set(
         .map(id => id.trim())
         .filter(Boolean)
 );
+// Optional personal destination for links pasted into the web app. This is
+// intentionally configured on the server, never supplied by the browser.
+const TELEGRAM_SAVE_CHAT_ID = String(process.env.TELEGRAM_SAVE_CHAT_ID || '').trim();
 const TELEGRAM_LOCK_PATH = path.join(DOWNLOADS_DIR, 'telegram_bot.lock');
+const TELEGRAM_OFFSET_PATH = path.join(DOWNLOADS_DIR, 'telegram_bot.offset');
+
+// Public base URL of this deployment. Railway injects RAILWAY_PUBLIC_DOMAIN
+// automatically; PUBLIC_BASE_URL overrides it. When set, the bot uses a
+// webhook instead of polling — webhooks always win over any other instance
+// polling the same token, which permanently fixes 409 getUpdates conflicts.
+const TELEGRAM_PUBLIC_URL = (
+    process.env.PUBLIC_BASE_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
+).replace(/\/+$/, '');
+const TELEGRAM_WEBHOOK_SECRET = TELEGRAM_BOT_TOKEN
+    ? crypto.createHash('sha256').update(`videograb-webhook:${TELEGRAM_BOT_TOKEN}`).digest('hex').slice(0, 48)
+    : '';
+
+// Quality options offered to bot users. Every chain degrades gracefully so
+// any site works even when the exact height is unavailable.
+const TELEGRAM_QUALITY_FORMATS = {
+    best: { label: 'Best', format: 'bestvideo+bestaudio/best' },
+    1080: { label: '1080p', format: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best' },
+    720: { label: '720p', format: 'bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best' },
+    480: { label: '480p', format: 'bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best' },
+    360: { label: '360p', format: 'bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best' },
+    audio: { label: 'Audio', format: 'bestaudio[ext=m4a]/bestaudio/best' }
+};
+
+// URLs waiting for the user to pick a quality (inline keyboard callback data
+// is limited to 64 bytes, so URLs are kept server-side under a short id).
+const telegramPendingLinks = new Map();
+let telegramNextLinkId = 1;
+
+function rememberTelegramLink(url) {
+    const id = String(telegramNextLinkId++);
+    telegramPendingLinks.set(id, { url, ts: Date.now() });
+    for (const [key, value] of telegramPendingLinks) {
+        if (Date.now() - value.ts > 30 * 60 * 1000 || telegramPendingLinks.size > 200) {
+            telegramPendingLinks.delete(key);
+        }
+    }
+    return id;
+}
+
 const telegramState = {
     enabled: Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_ENABLE_BOT),
+    mode: 'polling',
     username: '',
     link: '',
-    offset: 0,
+    offset: (() => {
+        try { return Math.max(0, Number(fs.readFileSync(TELEGRAM_OFFSET_PATH, 'utf8').trim()) || 0); }
+        catch { return 0; }
+    })(),
     activeChats: new Set(),
     running: false,
     lockOwner: false,
@@ -1064,7 +1311,12 @@ function sleep(ms) {
 
 function extractFirstUrl(text = '') {
     const match = text.match(/https?:\/\/[^\s<>"']+/i);
-    return match ? match[0] : '';
+    return match ? match[0].replace(/[),.!?]+$/, '') : '';
+}
+
+function saveTelegramOffset() {
+    try { fs.writeFileSync(TELEGRAM_OFFSET_PATH, String(telegramState.offset)); }
+    catch (err) { console.error('Could not save Telegram update offset:', err.message); }
 }
 
 function isTelegramChatAllowed(chatId) {
@@ -1131,7 +1383,7 @@ function formatTelegramQueue() {
     return lines.join('\n');
 }
 
-function enqueueTelegramJob(chatId, url) {
+function enqueueTelegramJob(chatId, url, quality = 'best') {
     if (telegramActiveJobs.size + telegramQueue.length >= TELEGRAM_MAX_QUEUE_SIZE) {
         return null;
     }
@@ -1140,6 +1392,7 @@ function enqueueTelegramJob(chatId, url) {
         id: telegramNextJobId++,
         chatId,
         url,
+        quality: TELEGRAM_QUALITY_FORMATS[quality] ? quality : 'best',
         status: 'queued',
         createdAt: Date.now(),
         startedAt: null,
@@ -1347,12 +1600,6 @@ async function telegramSendVideoFile(chatId, filePath, filename, caption) {
         throw new Error(`File is ${sizeMb.toFixed(1)} MB. Telegram bot upload limit is ${TELEGRAM_MAX_UPLOAD_MB} MB.`);
     }
 
-    // Telegram sendVideo has a ~20 MB limit for server-side processing;
-    // files above that get rejected. Fall back to sendDocument.
-    if (sizeMb > 20) {
-        return telegramSendDocument(chatId, filePath, filename, caption);
-    }
-
     try {
         return await telegramMultipart('sendVideo', {
             chat_id: chatId,
@@ -1366,15 +1613,13 @@ async function telegramSendVideoFile(chatId, filePath, filename, caption) {
     }
 }
 
-async function downloadTelegramVideoToFile(url) {
+async function downloadTelegramVideoToFile(url, quality = 'best') {
     const maxBytes = TELEGRAM_MAX_UPLOAD_MB * 1024 * 1024;
     const formatAttempts = [
-        'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-        'bestvideo[height<=360]+bestaudio/best[height<=360]/worst',
-        'best[ext=mp4][height<=480]/best[height<=480]',
-        'best[ext=mp4][height<=360]/best[height<=360]',
-        'worst[ext=mp4]/worst',
-        'best'
+        // Preserve the requested quality whenever it still fits in the
+        // Telegram upload limit. Only step down after the actual file proves
+        // too large.
+        ...buildTelegramFormatAttempts(quality)
     ];
 
     let lastError = null;
@@ -1386,6 +1631,7 @@ async function downloadTelegramVideoToFile(url) {
             if (size <= maxBytes) return file;
 
             lastError = new Error(`Downloaded file is ${(size / 1024 / 1024).toFixed(1)} MB, above Telegram limit ${TELEGRAM_MAX_UPLOAD_MB} MB.`);
+            lastError.oversize = true;
             try { fs.unlinkSync(file.filePath); } catch {}
         } catch (err) {
             lastError = err;
@@ -1396,6 +1642,23 @@ async function downloadTelegramVideoToFile(url) {
     throw lastError || new Error('Telegram download failed.');
 }
 
+// Attempts start at the requested quality and only step DOWN, so the bot
+// honors the user's choice but still delivers something when the file is
+// too large for Telegram.
+function buildTelegramFormatAttempts(quality) {
+    const chosen = TELEGRAM_QUALITY_FORMATS[quality] || TELEGRAM_QUALITY_FORMATS.best;
+    if (quality === 'audio') return [chosen.format];
+
+    const heights = [1080, 720, 480, 360];
+    const startIndex = quality === 'best' ? 0 : heights.indexOf(Number(quality)) + 1;
+    return [
+        chosen.format,
+        ...heights.slice(Math.max(0, startIndex)).map(h =>
+            `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`),
+        'worst[ext=mp4]/worst'
+    ];
+}
+
 async function runTelegramJob(job) {
     telegramActiveJobs.set(job.id, job);
     job.status = 'active';
@@ -1403,8 +1666,9 @@ async function runTelegramJob(job) {
     let filePath = '';
 
     try {
-        await telegramSendMessage(job.chatId, `⬇️ Downloading #${job.id}...`);
-        const file = await downloadTelegramVideoToFile(job.url);
+        const qualityLabel = (TELEGRAM_QUALITY_FORMATS[job.quality] || TELEGRAM_QUALITY_FORMATS.best).label;
+        await telegramSendMessage(job.chatId, `⬇️ Downloading #${job.id} (${qualityLabel})...`);
+        const file = await downloadTelegramVideoToFile(job.url, job.quality);
         filePath = file.filePath;
         job.filePath = filePath;
         telegramActiveFiles.add(filePath);
@@ -1425,8 +1689,16 @@ async function runTelegramJob(job) {
         telegramState.failedJobs += 1;
         telegramState.lastError = err.message || String(err);
         const msg = err.message || '';
-        if (msg.includes('MB. Telegram bot upload limit')) {
-            await telegramSendMessage(job.chatId, `❌ ${msg}`).catch(() => {});
+        if (err.oversize || msg.includes('MB. Telegram bot upload limit') || msg.includes('above Telegram limit')) {
+            // Telegram bots cannot upload big files, but the web app can
+            // deliver any size — hand the user a direct download link.
+            const directLink = TELEGRAM_PUBLIC_URL
+                ? `${TELEGRAM_PUBLIC_URL}/api/download?url=${encodeURIComponent(job.url)}&format=best&fast=1`
+                : '';
+            await telegramSendMessage(
+                job.chatId,
+                `⚠️ ${msg}` + (directLink ? `\n\n⬇️ Download the full file in your browser:\n${directLink}` : '')
+            ).catch(() => {});
         } else if (msg.includes('chat not found') || msg.includes('bot was blocked')) {
             console.error(`Telegram chat ${job.chatId} unreachable: ${msg}`);
         } else {
@@ -1456,19 +1728,18 @@ async function handleTelegramMessage(message) {
 
     if (/^\/start\b|^\/help\b/i.test(text)) {
         await telegramSendMessage(chatId,
-            '🎬 *VideoGrab Bot*\n\nPaste any video URL and I will download it and send the file here.\n\nCommands:\n/status - bot health\n/queue - active and waiting downloads\n/cancel - cancel your queued download\n/help - show this help',
-            'Markdown'
+            '🎬 VideoGrab Bot\n\nPaste any video URL, pick a quality (Best / 1080p / 720p / 480p / 360p / Audio), and I will download it and send the file here.\nIf a file is too big for Telegram, I will send you a direct download link instead.\n\nCommands:\n/status - bot health\n/queue - active and waiting downloads\n/cancel - cancel your queued download\n/help - show this help'
         );
         return;
     }
 
     if (/^\/status\b/i.test(text)) {
-        await telegramSendMessage(chatId, formatTelegramStatus(), 'Markdown');
+        await telegramSendMessage(chatId, formatTelegramStatus());
         return;
     }
 
     if (/^\/queue\b/i.test(text)) {
-        await telegramSendMessage(chatId, formatTelegramQueue(), 'Markdown');
+        await telegramSendMessage(chatId, formatTelegramQueue());
         return;
     }
 
@@ -1492,15 +1763,81 @@ async function handleTelegramMessage(message) {
         return;
     }
 
-    const job = enqueueTelegramJob(chatId, url);
-    if (!job) {
-        await telegramSendMessage(chatId, '⏳ The download queue is full. Try again later.');
-        return;
+    // Let the user pick the quality before downloading.
+    const linkId = rememberTelegramLink(url);
+    await telegramJson('sendMessage', {
+        chat_id: chatId,
+        text: `🎬 ${shortUrl(url)}\n\nChoose quality:`,
+        disable_web_page_preview: true,
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '⭐ Best', callback_data: `q:${linkId}:best` },
+                    { text: '1080p', callback_data: `q:${linkId}:1080` },
+                    { text: '720p', callback_data: `q:${linkId}:720` }
+                ],
+                [
+                    { text: '480p', callback_data: `q:${linkId}:480` },
+                    { text: '360p', callback_data: `q:${linkId}:360` },
+                    { text: '🎵 Audio', callback_data: `q:${linkId}:audio` }
+                ]
+            ]
+        }
+    });
+}
+
+async function handleTelegramCallback(callbackQuery) {
+    const chatId = callbackQuery.message?.chat?.id;
+    const answer = text => telegramJson('answerCallbackQuery', {
+        callback_query_id: callbackQuery.id,
+        ...(text ? { text } : {})
+    }).catch(() => {});
+
+    if (!chatId) return answer();
+    if (!isTelegramChatAllowed(chatId)) return answer('Access denied.');
+
+    const match = /^q:(\d+):(best|1080|720|480|360|audio)$/.exec(callbackQuery.data || '');
+    if (!match) return answer('Unknown action.');
+
+    const pending = telegramPendingLinks.get(match[1]);
+    if (!pending) return answer('This link expired. Send the URL again.');
+
+    if (telegramState.activeChats.has(chatId)) {
+        return answer('You already have a download running. Use /cancel first.');
     }
+
+    const quality = match[2];
+    const job = enqueueTelegramJob(chatId, pending.url, quality);
+    if (!job) return answer('The download queue is full. Try again later.');
+
+    telegramPendingLinks.delete(match[1]);
+    await answer(`Queued (${TELEGRAM_QUALITY_FORMATS[quality].label})`);
+
+    // Remove the keyboard so the same link is not queued twice.
+    telegramJson('editMessageReplyMarkup', {
+        chat_id: chatId,
+        message_id: callbackQuery.message.message_id,
+        reply_markup: { inline_keyboard: [] }
+    }).catch(() => {});
 
     const position = telegramQueue.findIndex(q => q.id === job.id) + 1;
     const queueText = position > 0 ? `Queued as #${job.id}. Position: ${position}.` : `Started as #${job.id}.`;
-    await telegramSendMessage(chatId, `${queueText}\nUse /queue for status or /cancel to cancel.`);
+    await telegramSendMessage(chatId, `${queueText}\nQuality: ${TELEGRAM_QUALITY_FORMATS[quality].label}.\nUse /queue for status or /cancel to cancel.`).catch(() => {});
+}
+
+// Route a Telegram update (from webhook or polling) to the right handler.
+function handleTelegramUpdate(update) {
+    telegramState.lastUpdateAt = new Date().toISOString();
+    if (update.message) {
+        return handleTelegramMessage(update.message);
+    }
+    if (update.channel_post) {
+        return handleTelegramMessage(update.channel_post);
+    }
+    if (update.callback_query) {
+        return handleTelegramCallback(update.callback_query);
+    }
+    return Promise.resolve();
 }
 
 async function startTelegramBot() {
@@ -1516,13 +1853,6 @@ async function startTelegramBot() {
     if (!acquireTelegramLock()) return;
 
     try {
-        // Clear any leftover webhook and drop pending updates to avoid 409 conflicts
-        try {
-            await telegramJson('deleteWebhook', { drop_pending_updates: true });
-        } catch (err) {
-            console.error('Telegram deleteWebhook failed (non-fatal):', err.message);
-        }
-
         // Retry getMe up to 5 times before giving up
         let me = null;
         for (let attempt = 1; attempt <= 5; attempt++) {
@@ -1543,10 +1873,41 @@ async function startTelegramBot() {
 
         telegramState.username = me.username || '';
         telegramState.link = telegramState.username ? `https://t.me/${telegramState.username}` : '';
-        telegramState.running = true;
         telegramState.startedAt = new Date().toISOString();
+
+        // Prefer webhook mode when this deployment has a public URL. A webhook
+        // always outranks any other instance polling the same token, which
+        // permanently fixes 409 getUpdates conflicts between deployments.
+        if (TELEGRAM_PUBLIC_URL && TELEGRAM_WEBHOOK_SECRET) {
+            try {
+                await telegramJson('setWebhook', {
+                    url: `${TELEGRAM_PUBLIC_URL}/api/telegram/webhook`,
+                    secret_token: TELEGRAM_WEBHOOK_SECRET,
+                    allowed_updates: ['message', 'channel_post', 'callback_query'],
+                    drop_pending_updates: false
+                });
+                telegramState.mode = 'webhook';
+                telegramState.running = true;
+                telegramState.lastError = '';
+                console.log(`Telegram bot started in webhook mode: @${telegramState.username} → ${TELEGRAM_PUBLIC_URL}/api/telegram/webhook`);
+                return;
+            } catch (err) {
+                console.error('Telegram setWebhook failed, falling back to polling:', err.message);
+            }
+        }
+
+        // Polling mode: a webhook and polling cannot run together. Keep pending
+        // updates and a persisted offset so a restart does not lose jobs.
+        try {
+            await telegramJson('deleteWebhook', { drop_pending_updates: false });
+        } catch (err) {
+            console.error('Telegram deleteWebhook failed (non-fatal):', err.message);
+        }
+
+        telegramState.mode = 'polling';
+        telegramState.running = true;
         telegramState.lastError = '';
-        console.log(`Telegram bot started: @${telegramState.username || '(no username)'}`);
+        console.log(`Telegram bot started in polling mode: @${telegramState.username || '(no username)'}`);
     } catch (err) {
         telegramState.running = false;
         telegramState.lastError = err.message || String(err);
@@ -1565,7 +1926,7 @@ async function startTelegramBot() {
                 updates = await telegramJson('getUpdates', {
                     offset: telegramState.offset,
                     timeout: TELEGRAM_POLL_TIMEOUT_SECONDS,
-                    allowed_updates: ['message']
+                    allowed_updates: ['message', 'channel_post', 'callback_query']
                 }, ac.signal);
             } finally {
                 clearTimeout(pollTimer);
@@ -1573,12 +1934,10 @@ async function startTelegramBot() {
 
             for (const update of (updates || [])) {
                 telegramState.offset = update.update_id + 1;
-                telegramState.lastUpdateAt = new Date().toISOString();
-                if (update.message) {
-                    handleTelegramMessage(update.message).catch(err => {
-                        console.error('Telegram message handler error:', err.message);
-                    });
-                }
+                saveTelegramOffset();
+                handleTelegramUpdate(update).catch(err => {
+                    console.error('Telegram update handler error:', err.message);
+                });
             }
             telegramState.running = true;
             telegramState.lastError = '';
@@ -1617,14 +1976,32 @@ async function startTelegramBot() {
     releaseTelegramLock();
 }
 
+// Receives updates pushed by Telegram in webhook mode. The secret header
+// proves the request really came from Telegram for this bot token.
+app.post('/api/telegram/webhook', (req, res) => {
+    if (!telegramState.enabled || !TELEGRAM_WEBHOOK_SECRET ||
+        req.get('x-telegram-bot-api-secret-token') !== TELEGRAM_WEBHOOK_SECRET) {
+        return res.sendStatus(403);
+    }
+    // Acknowledge immediately; process in the background so Telegram never
+    // retries an update just because a download is slow.
+    res.sendStatus(200);
+    telegramState.running = true;
+    handleTelegramUpdate(req.body || {}).catch(err => {
+        console.error('Telegram webhook update error:', err.message);
+    });
+});
+
 app.get('/api/telegram/status', (req, res) => {
     res.json({
         enabled: telegramState.enabled,
         running: telegramState.running,
+        mode: telegramState.mode,
         lockOwner: telegramState.lockOwner,
         username: telegramState.username,
         link: telegramState.link,
         maxUploadMb: TELEGRAM_MAX_UPLOAD_MB,
+        autoSaveEnabled: Boolean(TELEGRAM_SAVE_CHAT_ID),
         activeDownloads: telegramState.activeChats.size,
         activeJobs: telegramActiveJobs.size,
         queuedJobs: telegramQueue.length,
@@ -1644,6 +2021,28 @@ app.get('/api/telegram/status', (req, res) => {
     });
 });
 
+// The web app calls this after its Download button is pressed. It queues a
+// separate Telegram delivery without delaying the browser download.
+app.post('/api/telegram/save', async (req, res) => {
+    const url = String(req.body?.url || '').trim();
+    if (!url || !/^https?:\/\//i.test(url)) {
+        return res.status(400).json({ error: 'A valid video URL is required.' });
+    }
+    if (!telegramState.enabled || !TELEGRAM_SAVE_CHAT_ID) {
+        return res.status(503).json({ error: 'Telegram auto-save is not configured.' });
+    }
+    if (!isTelegramChatAllowed(TELEGRAM_SAVE_CHAT_ID)) {
+        return res.status(503).json({ error: 'Telegram auto-save chat is not allowed.' });
+    }
+    if (telegramState.activeChats.has(TELEGRAM_SAVE_CHAT_ID)) {
+        return res.status(202).json({ queued: false, message: 'Telegram is already saving a video.' });
+    }
+
+    const job = enqueueTelegramJob(TELEGRAM_SAVE_CHAT_ID, url, 'best');
+    if (!job) return res.status(429).json({ error: 'Telegram download queue is full.' });
+    return res.status(202).json({ queued: true, jobId: job.id });
+});
+
 // ── DOWNLOAD CLEANUP ────────────────────────────────────────────────────
 function cleanupDownloads() {
     const now = Date.now();
@@ -1655,7 +2054,7 @@ function cleanupDownloads() {
         for (const name of fs.readdirSync(DOWNLOADS_DIR)) {
             const filePath = path.join(DOWNLOADS_DIR, name);
             if (filePath === TELEGRAM_LOCK_PATH || telegramActiveFiles.has(filePath)) continue;
-            if (name === '_youtube_cookies.txt') continue;
+            if (name === '_youtube_cookies.txt' || name === path.basename(TELEGRAM_OFFSET_PATH)) continue;
 
             const stat = fs.statSync(filePath);
             if (!stat.isFile()) continue;

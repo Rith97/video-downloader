@@ -12,6 +12,8 @@ const errorMessage = document.getElementById('errorMessage');
 const errorText = document.getElementById('errorText');
 const videoCard = document.getElementById('videoCard');
 const videoThumbnail = document.getElementById('videoThumbnail');
+const videoEmbed = document.getElementById('videoEmbed');
+const videoPlayer = document.getElementById('videoPlayer');
 const videoTitle = document.getElementById('videoTitle');
 const videoDuration = document.getElementById('videoDuration');
 const videoPlatformBadge = document.getElementById('videoPlatformBadge');
@@ -207,6 +209,7 @@ function clearInput() {
     clearBtn.style.display = 'none';
     detectedPlatform.style.display = 'none';
     document.querySelectorAll('.platform-chip').forEach(c => c.classList.remove('active'));
+    resetPreviewPlayback();
     videoCard.style.display = 'none';
     hideError();
     currentVideoUrl = '';
@@ -318,8 +321,75 @@ async function fetchVideoInfo() {
     }
 }
 
+// ── IN-APP PLAYBACK ──────────────────────────────────────────────────────
+// Most adult/JAV sites stream HLS (.m3u8), which browsers other than Safari
+// cannot play natively — hls.js handles those. Direct MP4s play natively.
+let hlsInstance = null;
+let hlsLibraryPromise = null;
+
+function loadHlsLibrary() {
+    if (window.Hls) return Promise.resolve(window.Hls);
+    if (hlsLibraryPromise) return hlsLibraryPromise;
+    hlsLibraryPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js';
+        script.onload = () => resolve(window.Hls);
+        script.onerror = () => { hlsLibraryPromise = null; reject(new Error('hls.js failed to load')); };
+        document.head.appendChild(script);
+    });
+    return hlsLibraryPromise;
+}
+
+function resetPreviewPlayback() {
+    if (hlsInstance) {
+        try { hlsInstance.destroy(); } catch {}
+        hlsInstance = null;
+    }
+    videoEmbed.style.display = 'none';
+    videoEmbed.removeAttribute('src');
+    videoPlayer.pause();
+    videoPlayer.removeAttribute('src');
+    videoPlayer.load();
+    videoPlayer.onerror = null;
+    videoPlayer.style.display = 'none';
+    videoThumbnail.style.display = 'block';
+}
+
+function showPreviewFailed() {
+    resetPreviewPlayback();
+}
+
+async function startPreviewPlayback(src, previewType) {
+    videoPlayer.style.display = 'block';
+    videoThumbnail.style.display = 'none';
+
+    const isHls = previewType === 'hls' || /\.m3u8($|\?)/i.test(src);
+    if (isHls && !videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+        try {
+            const Hls = await loadHlsLibrary();
+            if (!Hls || !Hls.isSupported()) throw new Error('HLS not supported');
+            hlsInstance = new Hls({ maxBufferLength: 30 });
+            hlsInstance.loadSource(src);
+            hlsInstance.attachMedia(videoPlayer);
+            hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) showPreviewFailed();
+            });
+            videoPlayer.play().catch(() => {});
+        } catch {
+            showPreviewFailed();
+        }
+        return;
+    }
+
+    videoPlayer.src = src;
+    videoPlayer.onerror = showPreviewFailed;
+    videoPlayer.play().catch(() => {});
+}
+
 // ── DISPLAY VIDEO INFO ──────────────────────────────────────────────────
 function displayVideoInfo(info) {
+    resetPreviewPlayback();
+
     if (info.thumbnail) {
         videoThumbnail.src = info.thumbnail;
         videoThumbnail.alt = info.title;
@@ -333,6 +403,21 @@ function displayVideoInfo(info) {
     }
 
     videoTitle.textContent = info.title;
+
+    // Watch inside the app as soon as the link has been read. YouTube uses
+    // its supported embedded player; other sites use a combined stream when
+    // the platform exposes one. If a host blocks browser playback we retain
+    // the thumbnail and downloading still works.
+    if (info.embedUrl) {
+        videoEmbed.src = info.embedUrl;
+        videoEmbed.style.display = 'block';
+        videoThumbnail.style.display = 'none';
+    } else if (info.previewUrl || info.streamUrl) {
+        // The server preview relay retains host-specific Referer/cookie
+        // headers and avoids CORS blocks. Direct stream URL remains as a
+        // fallback for extractors that cannot provide a relay token.
+        startPreviewPlayback(info.previewUrl || info.streamUrl, info.previewType);
+    }
 
     if (info.duration) {
         videoDuration.textContent = formatDuration(info.duration);
@@ -451,6 +536,11 @@ async function downloadVideo() {
         });
     }
 
+    // Keep a copy in the configured personal Telegram chat. This is
+    // deliberately non-blocking: a Telegram upload must never hold up the
+    // user's browser download.
+    queueTelegramAutoSave(currentVideoUrl);
+
     if (usesNativeDownload()) {
         progressBarFill.style.width = '100%';
         setProgressPhase('transferring');
@@ -526,6 +616,22 @@ async function downloadVideo() {
     } finally {
         downloadBtn.disabled = false;
         downloadAbortController = null;
+    }
+}
+
+async function queueTelegramAutoSave(url) {
+    try {
+        const response = await fetch('/api/telegram/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            console.warn('Telegram auto-save was not queued:', data.error || response.status);
+        }
+    } catch (err) {
+        console.warn('Telegram auto-save request failed:', err);
     }
 }
 

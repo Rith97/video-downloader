@@ -5,6 +5,7 @@ primary_region = "sin"
 
 [env]
   PORT = "3000"
+  PUBLIC_BASE_URL = "https://kp-videograb-dl.fly.dev"
 
 [http_service]
   internal_port = 3000
