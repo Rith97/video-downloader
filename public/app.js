@@ -536,11 +536,6 @@ async function downloadVideo() {
         });
     }
 
-    // Keep a copy in the configured personal Telegram chat. This is
-    // deliberately non-blocking: a Telegram upload must never hold up the
-    // user's browser download.
-    queueTelegramAutoSave(currentVideoUrl);
-
     if (usesNativeDownload()) {
         progressBarFill.style.width = '100%';
         setProgressPhase('transferring');
@@ -616,22 +611,6 @@ async function downloadVideo() {
     } finally {
         downloadBtn.disabled = false;
         downloadAbortController = null;
-    }
-}
-
-async function queueTelegramAutoSave(url) {
-    try {
-        const response = await fetch('/api/telegram/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url })
-        });
-        if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
-            console.warn('Telegram auto-save was not queued:', data.error || response.status);
-        }
-    } catch (err) {
-        console.warn('Telegram auto-save request failed:', err);
     }
 }
 
