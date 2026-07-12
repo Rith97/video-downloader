@@ -263,7 +263,13 @@ function apiErrorPayload(raw, url) {
 function siteArgs(url) {
     if (isYoutubeUrl(url)) {
         const cookiesPath = getYoutubeCookiesPath();
-        return cookiesPath ? ['--cookies', cookiesPath] : [];
+        // YouTube can return no playable formats to authenticated web clients
+        // from a server IP. Its logged-out default/tv client is currently more
+        // reliable for public videos. Keep cookies opt-in for age-restricted
+        // or account-only videos via YOUTUBE_USE_COOKIES=1.
+        const args = ['--extractor-args', 'youtube:player_client=default,tv_simply'];
+        const useCookies = /^(1|true|yes)$/i.test(process.env.YOUTUBE_USE_COOKIES || '');
+        return cookiesPath && useCookies ? ['--cookies', cookiesPath, ...args] : args;
     }
     if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) {
         return [
