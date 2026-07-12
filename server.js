@@ -267,7 +267,21 @@ function siteArgs(url) {
         // from a server IP. Its logged-out default/tv client is currently more
         // reliable for public videos. Keep cookies opt-in for age-restricted
         // or account-only videos via YOUTUBE_USE_COOKIES=1.
-        const args = ['--extractor-args', 'youtube:player_client=default,tv_simply'];
+        const potProviderUrl = process.env.YOUTUBE_POT_PROVIDER_URL ||
+            (fs.existsSync('/opt/bgutil-ytdlp-pot-provider/server/build/main.js')
+                ? 'http://127.0.0.1:4416'
+                : '');
+        const clients = potProviderUrl ? 'mweb,default,tv_simply' : 'default,tv_simply';
+        // Node is available in the Railway image and lets yt-dlp solve
+        // YouTube's current JavaScript challenges instead of surfacing a
+        // misleading cookies/bot error for public videos.
+        const args = [
+            '--js-runtimes', 'node',
+            '--extractor-args', `youtube:player_client=${clients}`
+        ];
+        if (potProviderUrl) {
+            args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${potProviderUrl}`);
+        }
         const useCookies = /^(1|true|yes)$/i.test(process.env.YOUTUBE_USE_COOKIES || '');
         return cookiesPath && useCookies ? ['--cookies', cookiesPath, ...args] : args;
     }
@@ -2157,6 +2171,34 @@ function startYtDlpUpdateScheduler() {
     if (timer.unref) timer.unref();
 }
 
+let potProviderProcess = null;
+function startYoutubePotProvider() {
+    const script = process.env.YOUTUBE_POT_PROVIDER_SCRIPT ||
+        '/opt/bgutil-ytdlp-pot-provider/server/build/main.js';
+    if (!fs.existsSync(script)) return;
+
+    potProviderProcess = spawn(process.execPath, [script, '--port', '4416'], {
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    potProviderProcess.stdout.on('data', data => {
+        const line = data.toString().trim();
+        if (line) console.log(`YouTube POT provider: ${line}`);
+    });
+    potProviderProcess.stderr.on('data', data => {
+        const line = data.toString().trim();
+        if (line) console.error(`YouTube POT provider: ${line}`);
+    });
+    potProviderProcess.on('error', err => {
+        console.error('YouTube POT provider failed to start:', err.message);
+    });
+    potProviderProcess.on('close', code => {
+        if (code && !telegramState.stopping) {
+            console.error(`YouTube POT provider exited with code ${code}.`);
+        }
+        potProviderProcess = null;
+    });
+}
+
 // ── START SERVER ────────────────────────────────────────────────────────
 const HOST = process.env.HOST || '0.0.0.0';
 const server = app.listen(PORT, HOST, () => {
@@ -2167,6 +2209,7 @@ const server = app.listen(PORT, HOST, () => {
 ║     🎯  YouTube | Facebook | TikTok          ║
 ╚══════════════════════════════════════════════╝
     `);
+    startYoutubePotProvider();
     startCleanupScheduler();
     startYtDlpUpdateScheduler();
     startTelegramBot().catch(err => {
@@ -2187,6 +2230,10 @@ server.on('error', (err) => {
 function stopTelegramBot() {
     telegramState.stopping = true;
     if (cleanupTimer) clearInterval(cleanupTimer);
+    if (potProviderProcess) {
+        try { potProviderProcess.kill('SIGTERM'); } catch {}
+        potProviderProcess = null;
+    }
     releaseTelegramLock();
 }
 
