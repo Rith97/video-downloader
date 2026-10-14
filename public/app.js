@@ -29,9 +29,6 @@ const inputWrapper = document.getElementById('inputWrapper');
 const historySection = document.getElementById('historySection');
 const historyList = document.getElementById('historyList');
 const historyClearBtn = document.getElementById('historyClearBtn');
-const telegramBotCard = document.getElementById('telegramBotCard');
-const telegramBotText = document.getElementById('telegramBotText');
-const telegramBotLink = document.getElementById('telegramBotLink');
 
 const HISTORY_KEY = 'videograb_history';
 const MAX_HISTORY = 20;
@@ -48,7 +45,6 @@ let downloadAbortController = null;
 document.addEventListener('DOMContentLoaded', () => {
     createParticles();
     checkServerHealth();
-    checkTelegramBot();
     setupEventListeners();
     renderHistory();
 });
@@ -96,25 +92,6 @@ async function checkServerHealth() {
     } catch {
         statusText.textContent = 'Server offline';
         badgeDot.classList.add('error');
-    }
-}
-
-async function checkTelegramBot() {
-    if (!telegramBotCard || !telegramBotLink) return;
-
-    try {
-        const res = await fetch('/api/telegram/status');
-        const data = await res.json();
-        if (!res.ok || !data.running || !data.link) {
-            telegramBotCard.style.display = 'none';
-            return;
-        }
-
-        telegramBotLink.href = data.link;
-        telegramBotText.textContent = `Open @${data.username}, press Start, then paste a video link there (max ${data.maxUploadMb} MB).`;
-        telegramBotCard.style.display = 'flex';
-    } catch {
-        telegramBotCard.style.display = 'none';
     }
 }
 

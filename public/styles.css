@@ -90,12 +90,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @keyframes spin { to { transform: rotate(360deg); } }
 .detected-platform { width: fit-content; margin: 12px auto 0; padding: 7px 12px; border: 1px solid rgba(198,245,111,.18); border-radius: 99px; background: rgba(198,245,111,.06); color: #becab6; font-size: .8rem; }
 .detected-platform #platformName { color: var(--green); font-weight: 700; }
-.telegram-bot-card { width: min(100%,735px); margin: 18px auto 0; padding: 17px 19px; display: flex; align-items: center; gap: 15px; border: 1px solid #253c43; border-radius: 14px; background: #101719; }
-.telegram-bot-icon { color: #52b8dc; display: flex; }
-.telegram-bot-copy { display: grid; gap: 3px; flex: 1; }
-.telegram-bot-copy strong { font-size: .91rem; }
-.telegram-bot-copy span { color: var(--muted); font-size: .8rem; }
-.telegram-bot-link { color: #7bd7f8; font-weight: 700; font-size: .86rem; text-decoration: none; }
 .error-message { width: min(100%,735px); margin: 15px auto 0; display: flex; align-items: center; gap: 10px; padding: 13px 15px; border: 1px solid rgba(252,105,105,.25); border-radius: 12px; background: rgba(252,105,105,.07); color: #ff9a9a; font-size: .88rem; }
 
 .video-card { width: min(100%,735px); margin: 25px auto 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
@@ -166,8 +160,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     .video-card-inner { grid-template-columns: 1fr; }
     .video-thumbnail-wrap, .video-player { min-height: 230px; }
     .video-info { min-height: 255px; padding: 20px; }
-    .telegram-bot-card { gap: 11px; padding: 14px; }
-    .telegram-bot-copy span { line-height: 1.4; }
 }
 @media (max-width: 380px) {
     .app-container { width: calc(100% - 24px); }
